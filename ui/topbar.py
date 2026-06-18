@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QLineEdit, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ui.styles import *
@@ -14,6 +14,8 @@ from ui.widgets import make_label, hex_to_rgb
 
 class TopBar(QWidget):
     """Верхняя панель приложения."""
+    action_signal = pyqtSignal(str)  # 'create-order' or 'create-report'
+    logout_signal = pyqtSignal()
 
     def __init__(self, role: str = "admin", parent=None):
         super().__init__(parent)
@@ -124,6 +126,7 @@ class TopBar(QWidget):
         """)
         self._action_btn.setMinimumHeight(34)
         self._update_action_btn()
+        self._action_btn.clicked.connect(self._on_action)
         layout.addWidget(self._action_btn)
 
         # Аватар
@@ -156,6 +159,7 @@ class TopBar(QWidget):
             }}
         """)
         logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        logout_btn.clicked.connect(self.logout_signal.emit)
         layout.addWidget(logout_btn)
 
     def _update_time(self):
@@ -178,6 +182,12 @@ class TopBar(QWidget):
             font-weight: 600;
             color: {color};
         """)
+
+    def _on_action(self):
+        if self._role == "admin":
+            self.action_signal.emit("create-report")
+        else:
+            self.action_signal.emit("create-order")
 
     def _update_action_btn(self):
         if self._role == "admin":

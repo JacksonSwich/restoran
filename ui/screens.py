@@ -7,8 +7,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView,
     QLineEdit, QScrollArea, QGridLayout, QStackedWidget,
-    QComboBox, QSpinBox, QTextEdit, QMessageBox, QDialog,
-    QDialogButtonBox, QFormLayout, QGroupBox,
+    QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QMessageBox, QDialog,
+    QDialogButtonBox, QFormLayout, QGroupBox, QCheckBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -21,6 +21,18 @@ from ui.widgets import (
     ORDER_STATUS_CONFIG, TABLE_STATUS_CONFIG, PAYMENT_STATUS_CONFIG,
 )
 from database.queries import *
+
+# Module-level variable for passing order_id to OrderDetailsScreen
+_order_details_pending_id: int | None = None
+
+
+def _navigate_to_order(navigate_fn, order_id):
+    """Set the pending order ID and navigate to order details."""
+    global _order_details_pending_id
+    _order_details_pending_id = order_id
+    if navigate_fn:
+        navigate_fn("order-details")
+
 
 # ─── Aдминистративный дашборд ──────────────────────────────────
 
@@ -376,7 +388,7 @@ class WaiterWorkspace(QWidget):
             for o in ready_orders[:6]:
                 orders_grid.addWidget(_make_order_card(
                     o, highlight=True,
-                    on_open=lambda: self._navigate("order-details") if self._navigate else None
+                    on_open=lambda oid=o["id"]: self._navigate("order-details", oid)
                 ))
             layout.addLayout(orders_grid)
 
@@ -404,7 +416,7 @@ class WaiterWorkspace(QWidget):
             for o in working_orders[:6]:
                 orders_grid2.addWidget(_make_order_card(
                     o, highlight=False,
-                    on_open=lambda: self._navigate("order-details") if self._navigate else None
+                    on_open=lambda oid=o["id"]: self._navigate("order-details", oid)
                 ))
             layout.addLayout(orders_grid2)
         else:
@@ -447,6 +459,8 @@ class WaiterWorkspace(QWidget):
                 border-radius: 10px;
             """)
             card.setCursor(Qt.CursorShape.PointingHandCursor)
+            if self._navigate:
+                card.mousePressEvent = lambda ev, nav=self._navigate: nav("tables") if ev.button() == Qt.MouseButton.LeftButton else None
             cl = QVBoxLayout(card)
             cl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cl.setSpacing(4)
@@ -467,6 +481,186 @@ class WaiterWorkspace(QWidget):
 
 
 # ─── Столики ────────────────────────────────────────────────────
+
+class TableEditDialog(QDialog):
+    """Диалог редактирования столика (номер, места, зона)."""
+    def __init__(self, table: dict | None = None, parent=None):
+        super().__init__(parent)
+        self._table = table
+        is_new = table is None
+        self.setWindowTitle("Добавить столик" if is_new else "Изменить столик")
+        self.setModal(True)
+        self.setMinimumSize(380, 250)
+
+        layout = QFormLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        self._number_spin = QSpinBox()
+        self._number_spin.setMinimum(1)
+        self._number_spin.setMaximum(999)
+        if not is_new:
+            self._number_spin.setValue(table.get("table_number", 1))
+        layout.addRow("Номер столика:", self._number_spin)
+
+        self._seats_spin = QSpinBox()
+        self._seats_spin.setMinimum(1)
+        self._seats_spin.setMaximum(50)
+        if not is_new:
+            self._seats_spin.setValue(table.get("seats_count", 4))
+        layout.addRow("Количество мест:", self._seats_spin)
+
+        self._zone_combo = QComboBox()
+        self._zone_combo.addItems(["Основной зал", "VIP-зона", "Терраса"])
+        if not is_new and table.get("zone"):
+            idx = self._zone_combo.findText(table["zone"])
+            if idx >= 0:
+                self._zone_combo.setCurrentIndex(idx)
+        layout.addRow("Зона:", self._zone_combo)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText(
+            "Добавить" if is_new else "Сохранить"
+        )
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addRow(btn_box)
+
+    def _on_accept(self):
+        if self._number_spin.value() < 1:
+            QMessageBox.warning(self, "Ошибка", "Некорректный номер столика")
+            return
+        self.accept()
+
+    def get_result(self) -> dict:
+        return {
+            "table_number": self._number_spin.value(),
+            "seats": self._seats_spin.value(),
+            "zone": self._zone_combo.currentText(),
+        }
+
+
+class TableStatusDialog(QDialog):
+    """Диалог изменения статуса столика."""
+    def __init__(self, current_status: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Изменить статус столика")
+        self.setModal(True)
+        self.setMinimumSize(320, 200)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        layout.addWidget(make_label("Выберите новый статус:", 14, TEXT_PRIMARY))
+
+        self._status_combo = QComboBox()
+        statuses = [
+            ("free", "Свободен"),
+            ("occupied", "Занят"),
+            ("reserved", "Забронирован"),
+            ("out_of_service", "Недоступен"),
+        ]
+        for val, label in statuses:
+            self._status_combo.addItem(label, val)
+        for i, (val, _) in enumerate(statuses):
+            if val == current_status:
+                self._status_combo.setCurrentIndex(i)
+                break
+        layout.addWidget(self._status_combo)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Изменить")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_selected_status(self) -> str:
+        return self._status_combo.currentData()
+
+
+
+class TableBulkStatusDialog(QDialog):
+    """Dialog for changing table status with table selector and status selector."""
+
+    def __init__(self, tables: list[dict], preselected_table_id: int | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Изменить статус столика")
+        self.setModal(True)
+        self.setMinimumSize(380, 260)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        # Table selector
+        layout.addWidget(make_label("Выберите столик:", 14, TEXT_PRIMARY))
+        self._table_combo = QComboBox()
+        self._table_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {BG_CARD}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                padding: 9px 12px; font-size: 13px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_CARD}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                selection-background-color: rgba(201,164,92,0.15);
+            }}
+        """)
+        for t in tables:
+            label = f"Столик №{t['table_number']} ({t.get('zone', '')}) — {t.get('status', '')}"
+            self._table_combo.addItem(label, t["id"])
+        if preselected_table_id is not None:
+            for i in range(self._table_combo.count()):
+                if self._table_combo.itemData(i) == preselected_table_id:
+                    self._table_combo.setCurrentIndex(i)
+                    break
+        layout.addWidget(self._table_combo)
+
+        # Status selector
+        layout.addWidget(make_label("Новый статус:", 14, TEXT_PRIMARY))
+        self._status_combo = QComboBox()
+        statuses = [
+            ("free", "Свободен"),
+            ("occupied", "Занят"),
+            ("reserved", "Забронирован"),
+            ("out_of_service", "Недоступен"),
+        ]
+        for val, label in statuses:
+            self._status_combo.addItem(label, val)
+        self._status_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: {BG_CARD}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                padding: 9px 12px; font-size: 13px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background: {BG_CARD}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 6px;
+                selection-background-color: rgba(201,164,92,0.15);
+            }}
+        """)
+        layout.addWidget(self._status_combo)
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Подтвердить")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_result(self) -> tuple[int, str]:
+        return self._table_combo.currentData(), self._status_combo.currentData()
 
 class TablesScreen(QWidget):
     def __init__(self, role: str = "admin", on_navigate=None):
@@ -515,8 +709,12 @@ class TablesScreen(QWidget):
         header.addLayout(hleft)
         header.addStretch()
         if self._role == "admin":
-            header.addWidget(SecondaryButton("✏️ Изменить статус"))
-            header.addWidget(PrimaryButton("➕ Добавить столик"))
+            status_header_btn = SecondaryButton("✏️ Изменить статус")
+            status_header_btn.clicked.connect(self._on_bulk_status_change)
+            header.addWidget(status_header_btn)
+            add_table_btn = PrimaryButton("➕ Добавить столик")
+            add_table_btn.clicked.connect(self._on_add_table)
+            header.addWidget(add_table_btn)
         elif self._navigate:
             new_btn = PrimaryButton("➕ Создать заказ")
             new_btn.clicked.connect(lambda: self._navigate("new-order"))
@@ -575,6 +773,70 @@ class TablesScreen(QWidget):
     def _set_zone_filter(self, zid: str):
         self._zone_filter = zid
         self._refresh()
+
+    def _on_edit_table(self, table_id: int):
+        """Open dialog to edit table properties (number, seats, zone)."""
+        try:
+            tables = get_all_tables()
+            table = next((t for t in tables if t["id"] == table_id), None)
+            if not table:
+                QMessageBox.warning(self, "Ошибка", "Столик не найден")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+            return
+        dlg = TableEditDialog(table=table, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                update_table(
+                    table_id,
+                    table_number=result["table_number"],
+                    seats_count=result["seats"],
+                    zone=result["zone"],
+                )
+                self._refresh()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить столик:\n{e}")
+
+    def _on_change_table_status(self, table_id: int, current_status: str):
+        """Open dialog to change table status."""
+        dlg = TableStatusDialog(current_status, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_status = dlg.get_selected_status()
+            if new_status and new_status != current_status:
+                try:
+                    update_table_status(table_id, new_status)
+                    self._refresh()
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось изменить статус:\n{e}")
+
+    def _on_add_table(self):
+        """Open dialog to create a new table."""
+        dlg = TableEditDialog(table=None, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                create_table(result["table_number"], result["seats"], result["zone"])
+                self._refresh()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось создать столик:\n{e}")
+
+    def _on_bulk_status_change(self):
+        """Show dialog with table selector and status selector."""
+        try:
+            tables = get_all_tables()
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить столики:\n{e}")
+            return
+        dlg = TableBulkStatusDialog(tables, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            table_id, new_status = dlg.get_result()
+            try:
+                update_table_status(table_id, new_status)
+                self._refresh()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось изменить статус:\n{e}")
 
     def _make_table_card(self, t: dict) -> QFrame:
         cfg = TABLE_STATUS_CONFIG.get(t["status"], {})
@@ -664,11 +926,15 @@ class TablesScreen(QWidget):
             btn.clicked.connect(lambda: self._navigate("new-order"))
             actions.addWidget(btn)
         elif self._role == "admin":
-            actions.addWidget(SecondaryButton("✏️ Изменить"))
-            actions.addWidget(SecondaryButton("⚙️ Статус"))
+            edit_btn = SecondaryButton("✏️ Изменить")
+            edit_btn.clicked.connect(lambda checked, tid=t["id"]: self._on_edit_table(tid))
+            actions.addWidget(edit_btn)
+            status_btn = SecondaryButton("⚙️ Статус")
+            status_btn.clicked.connect(lambda checked, tid=t["id"], st=t["status"]: self._on_change_table_status(tid, st))
+            actions.addWidget(status_btn)
         elif self._role == "waiter" and t["status"] == "occupied" and self._navigate:
             btn = SecondaryButton("Открыть заказ")
-            btn.clicked.connect(lambda: self._navigate("order-details"))
+            btn.clicked.connect(lambda nav=self._navigate, oid=t.get("order_id"): _navigate_to_order(nav, oid) if nav and oid else None)
             actions.addWidget(btn)
         cl.addLayout(actions)
 
@@ -1166,25 +1432,141 @@ class NewOrderScreen(QWidget):
 
 # ─── Детали заказа ──────────────────────────────────────────────
 
+class AddDishDialog(QDialog):
+    """Диалог добавления блюда в заказ."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Добавить блюдо")
+        self.setModal(True)
+        self.setMinimumSize(420, 320)
+        self._dishes_map: dict = {}
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        try:
+            dishes = get_available_dishes()
+            if not dishes:
+                dishes = get_all_dishes()
+        except Exception:
+            dishes = []
+
+        self._dishes_map = {d["id"]: d for d in dishes}
+
+        # Dish combo
+        layout.addWidget(make_label("Блюдо:", 13, TEXT_PRIMARY))
+        self._dish_combo = QComboBox()
+        self._dish_combo.addItem("— Выберите блюдо —", None)
+        for d in dishes:
+            label = f"{d['name']} — {float(d['price']):,.0f} ₽".replace(",", " ")
+            self._dish_combo.addItem(label, d["id"])
+        layout.addWidget(self._dish_combo)
+
+        # Quantity
+        qty_row = QHBoxLayout()
+        qty_row.addWidget(make_label("Количество:", 13, TEXT_PRIMARY))
+        self._qty_spin = QSpinBox()
+        self._qty_spin.setMinimum(1)
+        self._qty_spin.setMaximum(99)
+        self._qty_spin.setValue(1)
+        self._qty_spin.setFixedWidth(80)
+        qty_row.addWidget(self._qty_spin)
+        qty_row.addStretch()
+        layout.addLayout(qty_row)
+
+        # Comment
+        layout.addWidget(make_label("Комментарий:", 13, TEXT_PRIMARY))
+        self._comment_edit = QLineEdit()
+        self._comment_edit.setPlaceholderText("Опционально")
+        layout.addWidget(self._comment_edit)
+
+        layout.addStretch()
+
+        # Buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Добавить")
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _on_accept(self):
+        if self._dish_combo.currentData() is None:
+            QMessageBox.warning(self, "Ошибка", "Выберите блюдо")
+            return
+        self.accept()
+
+    def get_result(self) -> dict:
+        dish_id = self._dish_combo.currentData()
+        dish = self._dishes_map.get(dish_id, {})
+        return {
+            "dish_id": dish_id,
+            "quantity": self._qty_spin.value(),
+            "price": float(dish.get("price", 0)),
+            "comment": self._comment_edit.text().strip(),
+        }
+
+
+class StatusDialog(QDialog):
+    """Диалог выбора нового статуса заказа."""
+
+    def __init__(self, statuses: list[tuple[str, str]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Изменить статус")
+        self.setModal(True)
+        self.setMinimumSize(300, 140)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        layout.addWidget(make_label("Новый статус:", 13, TEXT_PRIMARY))
+        self._combo = QComboBox()
+        for key, label in statuses:
+            self._combo.addItem(label, key)
+        layout.addWidget(self._combo)
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Подтвердить")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_selected_status(self) -> str | None:
+        return self._combo.currentData()
+
+
 class OrderDetailsScreen(QWidget):
+    """Детальный просмотр заказа с управлением."""
+
     def __init__(self, role: str = "admin", on_navigate=None):
         super().__init__()
         self._role = role
         self._navigate = on_navigate
+        self._current_order_id: int | None = None
+        self._current_order: dict | None = None
+        self._content_widget: QWidget | None = None
+        self._outer_layout: QVBoxLayout | None = None
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
     def _setup_ui(self):
+        """Create the scroll skeleton and back button (persistent)."""
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(20)
+        outer = QWidget()
+        self._outer_layout = QVBoxLayout(outer)
+        self._outer_layout.setContentsMargins(28, 28, 28, 28)
+        self._outer_layout.setSpacing(20)
 
-        # Back button
+        # Back button (stays across order loads)
         if self._navigate:
             back_btn = QPushButton("← Назад к заказам")
             back_btn.setStyleSheet(f"""
@@ -1194,24 +1576,79 @@ class OrderDetailsScreen(QWidget):
             """)
             back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             back_btn.clicked.connect(lambda: self._navigate("orders"))
-            layout.addWidget(back_btn)
+            self._outer_layout.addWidget(back_btn)
 
-        # Загружаем первый активный заказ для примера
-        try:
-            orders = get_all_orders()
-            order = orders[0] if orders else None
-        except:
-            order = None
+        scroll.setWidget(outer)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(scroll)
+
+        # Initial load
+        self._refresh()
+
+    def load_order(self, order_id: int):
+        """Public method to load a specific order by ID."""
+        self._current_order_id = order_id
+        self._refresh()
+
+    def showEvent(self, event):
+        """Refresh data when the screen becomes visible (handles navigation)."""
+        super().showEvent(event)
+        global _order_details_pending_id
+        if _order_details_pending_id is not None:
+            self._current_order_id = _order_details_pending_id
+            _order_details_pending_id = None
+        self._refresh()
+
+    # ─── Core loading / refresh ──────────────────────────────────
+
+    def _refresh(self):
+        """Reload order data and rebuild the entire content area."""
+        global _order_details_pending_id
+
+        # Consume pending order ID if one exists
+        if _order_details_pending_id is not None:
+            self._current_order_id = _order_details_pending_id
+            _order_details_pending_id = None
+
+        # Remove old content widget
+        if self._content_widget is not None:
+            self._outer_layout.removeWidget(self._content_widget)
+            self._content_widget.deleteLater()
+            self._content_widget = None
+
+        self._content_widget = QWidget()
+        cl = QVBoxLayout(self._content_widget)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(20)
+
+        # Determine which order to load
+        self._current_order = None
+        order_id = self._current_order_id
+        if order_id is not None:
+            try:
+                self._current_order = get_order_by_id(order_id)
+            except Exception:
+                pass
+
+        if self._current_order is None:
+            # Fallback: first available order
+            try:
+                orders = get_all_orders()
+                if orders:
+                    self._current_order = orders[0]
+            except Exception:
+                pass
+
+        order = self._current_order
+        self._current_order_id = order["id"] if order else None
 
         if not order:
-            layout.addWidget(make_label("Нет заказов для просмотра", 14, TEXT_MUTED))
-            scroll.setWidget(content)
-            main_layout = QVBoxLayout(self)
-            main_layout.setContentsMargins(0, 0, 0, 0)
-            main_layout.addWidget(scroll)
+            cl.addWidget(make_label("Нет заказов для просмотра", 14, TEXT_MUTED))
+            self._outer_layout.addWidget(self._content_widget)
             return
 
-        # Header
+        # ─── Header ──────────────────────────────────────────
         header = QHBoxLayout()
         hleft = QVBoxLayout()
         hleft.addWidget(make_manrope_label(f"Заказ #{order['id']}", 26, QFont.Weight.ExtraBold))
@@ -1220,51 +1657,57 @@ class OrderDetailsScreen(QWidget):
             f"Столик №{order.get('table_number', '?')} · {order.get('customer_name', '—')} · Создан: {order.get('created_at', '')}",
             13, TEXT_SECONDARY
         ))
-
         header.addLayout(hleft)
         header.addStretch()
-        badge = StatusBadge(cfg)
-        header.addWidget(badge)
-        layout.addLayout(header)
+        header.addWidget(StatusBadge(cfg))
+        header_widget = QWidget()
+        header_widget.setLayout(header)
+        cl.addWidget(header_widget)
 
-        # Main + sidebar
+        # ─── Body: left column + right sidebar ────────────────
         content_row = QHBoxLayout()
         content_row.setSpacing(20)
 
-        # Left - items table
         left_col = QVBoxLayout()
         left_col.setSpacing(16)
 
+        # ── Items table ──
         try:
             items = get_order_items(order["id"])
-        except:
+        except Exception:
             items = []
 
         table_card = Card()
         tl = QVBoxLayout(table_card)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.addWidget(SectionHeader("Состав заказа"))
-        tl.addWidget(make_label("", 1))  # separator
+        tl.addWidget(make_label("", 1))
 
         table = DataTable(["Блюдо", "Кол-во", "Цена", "Сумма", "Комментарий"])
         table.setRowCount(len(items))
         for i, item in enumerate(items):
             table.setItem(i, 0, QTableWidgetItem(item.get("dish_name", "—")))
             table.setItem(i, 1, QTableWidgetItem(str(item["quantity"])))
-            table.setItem(i, 2, QTableWidgetItem(f"{float(item['price_at_order']):,.0f} ₽".replace(",", " ")))
-            table.setItem(i, 3, QTableWidgetItem(f"{float(item['item_total']):,.0f} ₽".replace(",", " ")))
+            table.setItem(i, 2, QTableWidgetItem(
+                f"{float(item['price_at_order']):,.0f} ₽".replace(",", " ")
+            ))
+            table.setItem(i, 3, QTableWidgetItem(
+                f"{float(item['item_total']):,.0f} ₽".replace(",", " ")
+            ))
             table.setItem(i, 4, QTableWidgetItem(item.get("comment", "—") or "—"))
         tl.addWidget(table)
         left_col.addWidget(table_card)
 
-        # Total
+        # ── Totals ──
         total_card = Card()
         total_l = QVBoxLayout(total_card)
         total_l.setContentsMargins(24, 20, 24, 20)
         total_l.setSpacing(8)
-
-        total_l.addWidget(make_label(f"Сумма: {float(order['total_amount']):,.0f} ₽".replace(",", " "), 14, TEXT_SECONDARY))
-        if float(order["discount_amount"]) > 0:
+        total_l.addWidget(make_label(
+            f"Сумма: {float(order['total_amount']):,.0f} ₽".replace(",", " "),
+            14, TEXT_SECONDARY
+        ))
+        if float(order.get("discount_amount", 0)) > 0:
             total_l.addWidget(make_label(
                 f"Скидка: −{float(order['discount_amount']):,.0f} ₽".replace(",", " "),
                 14, SUCCESS
@@ -1275,29 +1718,75 @@ class OrderDetailsScreen(QWidget):
         ))
         left_col.addWidget(total_card)
 
-        # Actions
+        # ── Action buttons (role- and status-aware) ──
         actions = QHBoxLayout()
         actions.setSpacing(10)
-        if self._role == "waiter":
-            actions.addWidget(PrimaryButton("Добавить блюдо"))
-            actions.addWidget(SecondaryButton("Изменить статус"))
-            pay_btn = PrimaryButton("✅ Перейти к оплате")
-            pay_btn.setStyleSheet(pay_btn.styleSheet().replace(
-                f"stop:0 {GOLD}, stop:1 {GOLD_DARK}",
-                f"stop:0 {SUCCESS}, stop:1 #2D8A55"
-            ))
-            actions.addWidget(pay_btn)
-            actions.addWidget(DangerButton("Отменить заказ"))
-        else:
-            actions.addWidget(SecondaryButton("Редактировать заказ"))
-            actions.addWidget(SecondaryButton("Просмотреть оплату"))
-            actions.addWidget(SecondaryButton("История изменений"))
-            actions.addWidget(DangerButton("Отменить заказ"))
-        left_col.addLayout(actions)
 
+        status = order.get("status", "")
+        is_terminal = status in ("paid", "cancelled")
+
+        if self._role == "waiter":
+            if not is_terminal:
+                # "Добавить блюдо"
+                add_btn = PrimaryButton("Добавить блюдо")
+                add_btn.clicked.connect(self._on_add_dish)
+                actions.addWidget(add_btn)
+
+                # "Изменить статус" (only if there is a next status)
+                if self._get_next_statuses(status):
+                    status_btn = SecondaryButton("Изменить статус")
+                    status_btn.clicked.connect(self._on_change_status)
+                    actions.addWidget(status_btn)
+
+                # "Перейти к оплате" (ready / served)
+                if status in ("ready", "served"):
+                    pay_btn = PrimaryButton("✅ Перейти к оплате")
+                    pay_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #3FA66B, stop:1 #2D8A55);
+                            border: none; border-radius: 8px;
+                            color: white; font-size: 13px; font-weight: 600;
+                            padding: 10px 20px;
+                        }}
+                        QPushButton:hover {{
+                            background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #4BBF7A, stop:1 #3A9E62);
+                        }}
+                    """)
+                    pay_btn.clicked.connect(self._on_pay_order)
+                    actions.addWidget(pay_btn)
+
+                # "Отменить заказ"
+                cancel_btn = DangerButton("Отменить заказ")
+                cancel_btn.clicked.connect(self._on_cancel_order)
+                actions.addWidget(cancel_btn)
+            else:
+                label_text = "Оплачен" if status == "paid" else "Отменён"
+                actions.addWidget(make_label(label_text, 13, TEXT_MUTED))
+
+        elif self._role == "admin":
+            edit_btn = SecondaryButton("Редактировать заказ")
+            edit_btn.clicked.connect(self._on_edit_order)
+            actions.addWidget(edit_btn)
+
+            payment_btn = SecondaryButton("Просмотреть оплату")
+            payment_btn.clicked.connect(self._on_view_payment)
+            actions.addWidget(payment_btn)
+
+            history_btn = SecondaryButton("История изменений")
+            history_btn.clicked.connect(self._on_view_history)
+            actions.addWidget(history_btn)
+
+            if not is_terminal:
+                cancel_btn = DangerButton("Отменить заказ")
+                cancel_btn.clicked.connect(self._on_cancel_order)
+                actions.addWidget(cancel_btn)
+
+        left_col.addLayout(actions)
         content_row.addLayout(left_col, 1)
 
-        # Right panel - timeline & info
+        # ─── Right column: timeline + info ─────────────────────
         right_col = QVBoxLayout()
         right_col.setSpacing(16)
 
@@ -1324,21 +1813,33 @@ class OrderDetailsScreen(QWidget):
             done = i <= current_idx
             current = i == current_idx
 
+            if current:
+                dot_color = GOLD
+                dot_bg = f"rgba({','.join(map(str, hex_to_rgb(GOLD)))},0.15)"
+                dot_border = GOLD
+            elif done:
+                dot_color = SUCCESS
+                dot_bg = f"rgba({','.join(map(str, hex_to_rgb(SUCCESS)))},0.1)"
+                dot_border = SUCCESS
+            else:
+                dot_color = TEXT_MUTED
+                dot_bg = "transparent"
+                dot_border = BORDER
+
             dot = QLabel("●" if done else "○")
-            dot.setStyleSheet(f"""
-                font-size: 14px;
-                color: {GOLD if current else (SUCCESS if done else TEXT_MUTED)};
-                background: rgba(201,164,92,0.15) if current else (
-                    rgba(63,166,107,0.1) if done else transparent);
-                border: 2px solid {'{GOLD}' if current else ('{SUCCESS}' if done else '{BORDER}')};
-                border-radius: 14px;
-                padding: 4px;
-            """)
+            dot.setStyleSheet(
+                f"font-size: 14px; color: {dot_color};"
+                f"background: {dot_bg};"
+                f"border: 2px solid {dot_border};"
+                f"border-radius: 14px; padding: 4px;"
+            )
             step.addWidget(dot)
 
-            lbl = make_label(label, 13,
-                             GOLD if current else (TEXT_PRIMARY if done else TEXT_MUTED),
-                             QFont.Weight.Bold if current else QFont.Weight.Normal)
+            lbl = make_label(
+                label, 13,
+                GOLD if current else (TEXT_PRIMARY if done else TEXT_MUTED),
+                QFont.Weight.Bold if current else QFont.Weight.Normal
+            )
             step.addWidget(lbl)
             step.addStretch()
             tml.addLayout(step)
@@ -1347,15 +1848,28 @@ class OrderDetailsScreen(QWidget):
                 line = QFrame()
                 line.setFixedWidth(2)
                 line.setFixedHeight(20)
-                line.setStyleSheet(f"""
-                    background: {'{SUCCESS}44' if done and i < current_idx else BORDER};
-                    margin-left: 10px;
-                """)
+                line_color = f"{SUCCESS}44" if done and i < current_idx else BORDER
+                line.setStyleSheet(f"background: {line_color}; margin-left: 10px;")
                 tml.addWidget(line, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        # Cancelled state step after the normal flow
+        if status == "cancelled":
+            step = QHBoxLayout()
+            step.setSpacing(14)
+            dot = QLabel("✕")
+            dot.setStyleSheet(
+                f"font-size: 14px; color: {ERROR};"
+                f"border: 2px solid {ERROR};"
+                f"border-radius: 14px; padding: 4px;"
+            )
+            step.addWidget(dot)
+            step.addWidget(make_label("Отменён", 13, ERROR, QFont.Weight.Bold))
+            step.addStretch()
+            tml.addLayout(step)
 
         right_col.addWidget(timeline_card)
 
-        # Info
+        # Info card
         info_card = Card()
         il = QVBoxLayout(info_card)
         il.setContentsMargins(20, 18, 20, 18)
@@ -1375,13 +1889,129 @@ class OrderDetailsScreen(QWidget):
             il.addLayout(row)
         right_col.addWidget(info_card)
 
-        content_row.addLayout(right_col)
-        layout.addLayout(content_row)
+        # Closed-at info for terminal statuses
+        if status in ("paid", "cancelled") and order.get("closed_at"):
+            label_text = "Оплачен" if status == "paid" else "Отменён"
+            right_col.addWidget(make_label(
+                f"{label_text}: {order['closed_at']}", 12, TEXT_MUTED
+            ))
 
-        scroll.setWidget(content)
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        content_row.addLayout(right_col)
+
+        content_row_widget = QWidget()
+        content_row_widget.setLayout(content_row)
+        cl.addWidget(content_row_widget)
+
+        self._outer_layout.addWidget(self._content_widget)
+
+    # ─── Status helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def _get_next_statuses(current_status: str) -> list[tuple[str, str]]:
+        """Return valid next status transitions."""
+        transitions = {
+            "new": [("cooking", "Готовится")],
+            "cooking": [("ready", "Готов")],
+            "ready": [("served", "Подан")],
+            "served": [("paid", "Оплачен")],
+            "paid": [],
+            "cancelled": [],
+        }
+        return transitions.get(current_status, [])
+
+    # ─── Action handlers ─────────────────────────────────────────
+
+    def _on_add_dish(self):
+        """Show dish selector dialog and add the chosen dish to the order."""
+        if self._current_order_id is None:
+            return
+        dlg = AddDishDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                add_order_item(
+                    self._current_order_id,
+                    result["dish_id"],
+                    result["quantity"],
+                    result["price"],
+                    result["comment"],
+                )
+                self._refresh()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось добавить блюдо:\n{e}")
+
+    def _on_change_status(self):
+        """Show status selector dialog and update the order status."""
+        if self._current_order_id is None or self._current_order is None:
+            return
+        next_statuses = self._get_next_statuses(self._current_order["status"])
+        if not next_statuses:
+            QMessageBox.information(self, "Инфо", "Нет доступных статусов для изменения")
+            return
+        dlg = StatusDialog(next_statuses, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_status = dlg.get_selected_status()
+            if new_status:
+                try:
+                    update_order_status(self._current_order_id, new_status)
+                    self._refresh()
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось изменить статус:\n{e}")
+
+    def _on_pay_order(self):
+        """Open payment dialog. On confirmation create payment and mark order paid."""
+        if self._current_order_id is None or self._current_order is None:
+            return
+        order = self._current_order
+        method = PaymentDialog.get_payment(
+            order_id=order["id"],
+            table_number=order.get("table_number", "?"),
+            subtotal=float(order["total_amount"]),
+            discount=float(order.get("discount_amount", 0)),
+            final_amount=float(order["final_amount"]),
+            parent=self,
+        )
+        if method:
+            try:
+                create_payment(order["id"], float(order["final_amount"]), method)
+                update_order_status(order["id"], "paid")
+                QMessageBox.information(
+                    self, "Оплачено",
+                    f"Заказ #{order['id']} оплачен ({method})"
+                )
+                if self._navigate:
+                    self._navigate("orders")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось провести оплату:\n{e}")
+
+    def _on_cancel_order(self):
+        """Confirm and cancel the order."""
+        if self._current_order_id is None:
+            return
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            f"Вы уверены, что хотите отменить заказ #{self._current_order_id}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                cancel_order(self._current_order_id)
+                if self._navigate:
+                    self._navigate("orders")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось отменить заказ:\n{e}")
+
+    # ─── Placeholder handlers (admin) ────────────────────────────
+
+    def _on_edit_order(self):
+        QMessageBox.information(self, "Инфо", "Редактирование заказа (в разработке)")
+
+    def _on_view_payment(self):
+        QMessageBox.information(self, "Инфо", "Просмотр оплаты (в разработке)")
+
+    def _on_view_history(self):
+        QMessageBox.information(self, "Инфо", "История изменений (в разработке)")
 
 
 # ─── Список заказов ─────────────────────────────────────────────
@@ -1487,7 +2117,7 @@ class OrdersListScreen(QWidget):
                 padding: 5px 10px;
             """)
             if self._navigate:
-                open_btn.clicked.connect(lambda checked, oid=o["id"]: self._navigate("order-details"))
+                open_btn.clicked.connect(lambda checked, nav=self._navigate, oid=o["id"]: _navigate_to_order(nav, oid))
             action_layout.addWidget(open_btn)
 
             if self._role == "waiter" and o["status"] not in ("paid", "cancelled"):
@@ -1499,6 +2129,7 @@ class OrdersListScreen(QWidget):
                     color: {SUCCESS}; font-size: 11px; font-weight: 600;
                     padding: 5px 10px;
                 """)
+                pay_btn.clicked.connect(lambda checked, od=o: self._on_pay_order(od))
                 action_layout.addWidget(pay_btn)
 
             table.setCellWidget(i, 8, action_widget)
@@ -1629,7 +2260,7 @@ class OrdersListScreen(QWidget):
         # Action button
         if self._navigate:
             open_btn = PrimaryButton("📄 Открыть заказ")
-            open_btn.clicked.connect(lambda: self._navigate("order-details"))
+            open_btn.clicked.connect(lambda nav=self._navigate: _navigate_to_order(nav, self._selected_order_id) if self._selected_order_id else None)
             self._preview_layout.addWidget(open_btn)
 
     def _select_order(self, order_id):
@@ -1651,8 +2282,142 @@ class OrdersListScreen(QWidget):
         self._search_text = text
         self._setup_ui()
 
+    def _on_pay_order(self, order: dict):
+        """Open payment dialog and process payment for the given order."""
+        method = PaymentDialog.get_payment(
+            order_id=order["id"],
+            table_number=order.get("table_number", "?"),
+            subtotal=float(order["total_amount"]),
+            discount=float(order.get("discount_amount", 0)),
+            final_amount=float(order["final_amount"]),
+            parent=self,
+        )
+        if method:
+            try:
+                create_payment(order["id"], float(order["final_amount"]), method)
+                update_order_status(order["id"], "paid")
+                QMessageBox.information(
+                    self, "Оплачено",
+                    f"Заказ #{order['id']} оплачен ({method})"
+                )
+                self._setup_ui()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось провести оплату:\n{e}")
+
 
 # ─── Меню ───────────────────────────────────────────────────────
+
+class DishEditDialog(QDialog):
+    """Диалог добавления/редактирования блюда в меню."""
+    def __init__(self, dish: dict | None = None, parent=None):
+        super().__init__(parent)
+        self._dish = dish
+        is_new = dish is None
+        self.setWindowTitle("Добавить блюдо" if is_new else "Редактировать блюдо")
+        self.setModal(True)
+        self.setMinimumSize(450, 400)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        # Name
+        layout.addWidget(make_label("Название блюда:", 13, TEXT_PRIMARY))
+        self._name_edit = QLineEdit()
+        if not is_new:
+            self._name_edit.setText(dish.get("name", ""))
+        layout.addWidget(self._name_edit)
+
+        # Category
+        layout.addWidget(make_label("Категория:", 13, TEXT_PRIMARY))
+        self._cat_combo = QComboBox()
+        try:
+            cats = get_all_categories()
+            for c in cats:
+                self._cat_combo.addItem(c["name"], c["id"])
+        except:
+            pass
+        if not is_new and dish.get("category_id"):
+            idx = self._cat_combo.findData(dish["category_id"])
+            if idx >= 0:
+                self._cat_combo.setCurrentIndex(idx)
+        layout.addWidget(self._cat_combo)
+
+        # Price
+        layout.addWidget(make_label("Цена (₽):", 13, TEXT_PRIMARY))
+        self._price_spin = QDoubleSpinBox()
+        self._price_spin.setMinimum(0)
+        self._price_spin.setMaximum(999999)
+        self._price_spin.setDecimals(2)
+        if not is_new:
+            self._price_spin.setValue(float(dish.get("price", 0)))
+        layout.addWidget(self._price_spin)
+
+        # Weight
+        layout.addWidget(make_label("Вес (г):", 13, TEXT_PRIMARY))
+        self._weight_edit = QLineEdit()
+        if not is_new:
+            self._weight_edit.setText(str(dish.get("weight", "")))
+        layout.addWidget(self._weight_edit)
+
+        # Cooking time
+        layout.addWidget(make_label("Время приготовления (мин):", 13, TEXT_PRIMARY))
+        self._cook_spin = QSpinBox()
+        self._cook_spin.setMinimum(0)
+        self._cook_spin.setMaximum(999)
+        if not is_new:
+            self._cook_spin.setValue(int(dish.get("cooking_time_minutes", 0) or 0))
+        layout.addWidget(self._cook_spin)
+
+        # Description
+        layout.addWidget(make_label("Описание:", 13, TEXT_PRIMARY))
+        self._desc_edit = QTextEdit()
+        self._desc_edit.setMaximumHeight(80)
+        if not is_new:
+            self._desc_edit.setPlainText(dish.get("description", ""))
+        layout.addWidget(self._desc_edit)
+
+        # Is available
+        self._avail_check = QCheckBox("Блюдо доступно")
+        self._avail_check.setChecked(dish.get("is_available", True) if not is_new else True)
+        self._avail_check.setStyleSheet(f"""
+            QCheckBox {{ color: {TEXT_PRIMARY}; font-size: 13px; spacing: 8px; }}
+            QCheckBox::indicator {{ width: 18px; height: 18px; }}
+        """)
+        layout.addWidget(self._avail_check)
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText(
+            "Добавить" if is_new else "Сохранить"
+        )
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _on_accept(self):
+        if not self._name_edit.text().strip():
+            QMessageBox.warning(self, "Ошибка", "Введите название блюда")
+            return
+        if self._price_spin.value() <= 0:
+            QMessageBox.warning(self, "Ошибка", "Цена должна быть больше 0")
+            return
+        self.accept()
+
+    def get_result(self) -> dict:
+        return {
+            "category_id": self._cat_combo.currentData(),
+            "name": self._name_edit.text().strip(),
+            "description": self._desc_edit.toPlainText().strip(),
+            "price": self._price_spin.value(),
+            "weight": self._weight_edit.text().strip(),
+            "cooking_time_minutes": self._cook_spin.value(),
+            "is_available": self._avail_check.isChecked(),
+        }
+
 
 class MenuScreen(QWidget):
     def __init__(self, role: str = "admin"):
@@ -1752,7 +2517,9 @@ class MenuScreen(QWidget):
         header.addLayout(hleft)
         header.addStretch()
         if self._role == "admin":
-            header.addWidget(PrimaryButton("➕ Добавить блюдо"))
+            add_dish_btn = PrimaryButton("➕ Добавить блюдо")
+            add_dish_btn.clicked.connect(self._on_add_dish)
+            header.addWidget(add_dish_btn)
         rl.addLayout(header)
 
         # Filters
@@ -1788,6 +2555,32 @@ class MenuScreen(QWidget):
 
         self._refresh_grid()
         main_layout.addWidget(right, 1)
+
+    def _on_add_dish(self):
+        """Open dialog to create a new dish."""
+        dlg = DishEditDialog(dish=None, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                create_dish(
+                    result["category_id"], result["name"],
+                    result["description"], result["price"],
+                    result["weight"], result["cooking_time_minutes"],
+                )
+                self._refresh_grid()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось добавить блюдо:\n{e}")
+
+    def _on_edit_dish(self, dish: dict):
+        """Open dialog to edit an existing dish."""
+        dlg = DishEditDialog(dish=dish, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                update_dish(dish["id"], **result)
+                self._refresh_grid()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить блюдо:\n{e}")
 
     def _set_category(self, cat: str):
         self._category = cat
@@ -1871,6 +2664,7 @@ class MenuScreen(QWidget):
 
         if self._role == "admin":
             edit_btn = SecondaryButton("✏️ Редактировать")
+            edit_btn.clicked.connect(lambda checked, d=dish: self._on_edit_dish(d))
             price_row.addWidget(edit_btn)
         else:
             status_text = "Доступно" if available else "Недоступно"
@@ -1890,6 +2684,73 @@ class MenuScreen(QWidget):
 
 
 # ─── Клиенты ────────────────────────────────────────────────────
+
+class CustomerEditDialog(QDialog):
+    """Диалог создания/редактирования клиента."""
+    def __init__(self, customer: dict | None = None, parent=None):
+        super().__init__(parent)
+        self._customer = customer
+        is_new = customer is None
+        self.setWindowTitle("Создать клиента" if is_new else "Редактировать клиента")
+        self.setModal(True)
+        self.setMinimumSize(400, 350)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        layout.addWidget(make_label("Имя:", 13, TEXT_PRIMARY))
+        self._name_edit = QLineEdit()
+        if not is_new:
+            self._name_edit.setText(customer.get("full_name", ""))
+        layout.addWidget(self._name_edit)
+
+        layout.addWidget(make_label("Телефон:", 13, TEXT_PRIMARY))
+        self._phone_edit = QLineEdit()
+        if not is_new:
+            self._phone_edit.setText(customer.get("phone", ""))
+        layout.addWidget(self._phone_edit)
+
+        layout.addWidget(make_label("Email:", 13, TEXT_PRIMARY))
+        self._email_edit = QLineEdit()
+        if not is_new:
+            self._email_edit.setText(customer.get("email", ""))
+        layout.addWidget(self._email_edit)
+
+        layout.addWidget(make_label("Скидка (%):", 13, TEXT_PRIMARY))
+        self._discount_spin = QSpinBox()
+        self._discount_spin.setMinimum(0)
+        self._discount_spin.setMaximum(50)
+        if not is_new:
+            self._discount_spin.setValue(int(customer.get("discount_percent", 0) or 0))
+        layout.addWidget(self._discount_spin)
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText(
+            "Создать" if is_new else "Сохранить"
+        )
+        btn_box.accepted.connect(self._on_accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _on_accept(self):
+        if not self._name_edit.text().strip():
+            QMessageBox.warning(self, "Ошибка", "Введите имя клиента")
+            return
+        self.accept()
+
+    def get_result(self) -> dict:
+        return {
+            "full_name": self._name_edit.text().strip(),
+            "phone": self._phone_edit.text().strip(),
+            "email": self._email_edit.text().strip(),
+            "discount_percent": self._discount_spin.value(),
+        }
+
 
 class CustomersScreen(QWidget):
     def __init__(self, role: str = "admin"):
@@ -1925,8 +2786,10 @@ class CustomersScreen(QWidget):
             search.textChanged.connect(lambda t: self._set_search(t))
             layout.addWidget(search)
 
+            create_customer_btn = PrimaryButton("👤 Создать клиента")
+            create_customer_btn.clicked.connect(self._on_create_customer)
             header_actions = QHBoxLayout()
-            header_actions.addWidget(PrimaryButton("👤 Создать клиента"))
+            header_actions.addWidget(create_customer_btn)
             header_actions.addStretch()
             layout.addLayout(header_actions)
 
@@ -1968,7 +2831,9 @@ class CustomersScreen(QWidget):
                     """)
                     cl.addWidget(disc_badge)
 
-                cl.addWidget(SecondaryButton("Выбрать клиента"))
+                select_btn = SecondaryButton("Выбрать клиента")
+                select_btn.clicked.connect(lambda checked, cust=c: self._on_select_customer(cust))
+                cl.addWidget(select_btn)
                 layout.addWidget(card)
         else:
             # Admin full view
@@ -1982,7 +2847,9 @@ class CustomersScreen(QWidget):
             hleft.addWidget(make_label(f"{len(customers)} клиентов в базе", 13, TEXT_MUTED))
             header.addLayout(hleft)
             header.addStretch()
-            header.addWidget(PrimaryButton("➕ Добавить клиента"))
+            add_customer_btn = PrimaryButton("➕ Добавить клиента")
+            add_customer_btn.clicked.connect(self._on_create_customer)
+            header.addWidget(add_customer_btn)
             layout.addLayout(header)
 
             search = QLineEdit()
@@ -2038,6 +2905,7 @@ class CustomersScreen(QWidget):
                     background: {BG_ELEVATED}; border: 1px solid {BORDER};
                     border-radius: 7px; color: {TEXT_SECONDARY};
                 """)
+                edit_btn.clicked.connect(lambda checked, cust=c: self._on_edit_customer(cust))
                 al.addWidget(edit_btn)
                 hist_btn = QPushButton("📋")
                 hist_btn.setFixedSize(30, 30)
@@ -2045,6 +2913,7 @@ class CustomersScreen(QWidget):
                     background: {BG_ELEVATED}; border: 1px solid {BORDER};
                     border-radius: 7px; color: {TEXT_SECONDARY};
                 """)
+                hist_btn.clicked.connect(lambda checked, cust=c: self._on_view_customer_history(cust))
                 al.addWidget(hist_btn)
                 table.setCellWidget(i, 7, action_widget)
 
@@ -2058,6 +2927,93 @@ class CustomersScreen(QWidget):
     def _set_search(self, text: str):
         self._search = text
         self._setup_ui()
+
+    def _on_create_customer(self):
+        """Open dialog to create a new customer."""
+        dlg = CustomerEditDialog(customer=None, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                create_customer(
+                    result["full_name"], result["phone"], result["email"],
+                    result["discount_percent"],
+                )
+                QMessageBox.information(self, "Готово",
+                    f"Клиент {result['full_name']} создан")
+                self._setup_ui()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось создать клиента:\n{e}")
+
+    def _on_select_customer(self, customer: dict):
+        """Handle selecting a customer (waiter view)."""
+        name = customer.get("full_name", "—")
+        phone = customer.get("phone", "—")
+        QMessageBox.information(self, "Клиент выбран",
+            f"Выбран клиент: {name}\nТелефон: {phone}")
+
+    def _on_edit_customer(self, customer: dict):
+        """Open dialog to edit an existing customer."""
+        dlg = CustomerEditDialog(customer=customer, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            result = dlg.get_result()
+            try:
+                update_customer(customer["id"], **result)
+                QMessageBox.information(self, "Готово",
+                    f"Клиент {result['full_name']} обновлён")
+                self._setup_ui()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить клиента:\n{e}")
+
+    def _on_view_customer_history(self, customer: dict):
+        """Show dialog with customer's orders."""
+        cust_id = customer.get("id")
+        name = customer.get("full_name", "—")
+        try:
+            all_orders = get_all_orders()
+            orders = [o for o in all_orders if o.get("customer_id") == cust_id]
+        except Exception:
+            orders = []
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Заказы клиента — {name}")
+        dlg.setModal(True)
+        dlg.setMinimumSize(700, 400)
+
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        header_lbl = make_manrope_label(
+            f"Заказы клиента: {name}", 16, QFont.Weight.DemiBold
+        )
+        layout.addWidget(header_lbl)
+        layout.addWidget(make_label(f"Всего заказов: {len(orders)}", 13, TEXT_MUTED))
+
+        if orders:
+            table = DataTable(["№ заказа", "Дата", "Статус", "Сумма", "Итого"])
+            table.setRowCount(len(orders))
+            for i, o in enumerate(orders):
+                table.setItem(i, 0, QTableWidgetItem(f"#{o['id']}"))
+                table.setItem(i, 1, QTableWidgetItem(str(o.get("created_at", ""))))
+                cfg = ORDER_STATUS_CONFIG.get(o["status"], {})
+                table.setItem(i, 2, QTableWidgetItem(cfg.get("label", o["status"])))
+                table.setItem(i, 3, QTableWidgetItem(
+                    f"{float(o['total_amount']):,.0f} ₽".replace(",", " ")
+                ))
+                table.setItem(i, 4, QTableWidgetItem(
+                    f"{float(o['final_amount']):,.0f} ₽".replace(",", " ")
+                ))
+            layout.addWidget(table)
+        else:
+            layout.addWidget(make_label("У клиента нет заказов", 14, TEXT_MUTED))
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btn_box.rejected.connect(dlg.reject)
+        layout.addWidget(btn_box)
+
+        dlg.exec()
 
 
 # ─── Оплаты ─────────────────────────────────────────────────────
@@ -2353,6 +3309,7 @@ class PaymentsScreen(QWidget):
 class ReportsScreen(QWidget):
     def __init__(self):
         super().__init__()
+        self._period = "Неделя"
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
@@ -2374,7 +3331,8 @@ class ReportsScreen(QWidget):
         period_btns = QHBoxLayout()
         period_btns.setSpacing(8)
         for i, p in enumerate(["Сегодня", "Неделя", "Месяц"]):
-            btn = FilterTab(p, i == 1)
+            btn = FilterTab(p, self._period == p)
+            btn.clicked.connect(lambda checked, pp=p: self._set_period(pp))
             period_btns.addWidget(btn)
         header.addLayout(period_btns)
         layout.addLayout(header)
@@ -2529,12 +3487,19 @@ class ReportsScreen(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
+    def _set_period(self, period: str):
+        """Switch report period and refresh."""
+        self._period = period
+        self._setup_ui()
+
 
 # ─── Настройки ──────────────────────────────────────────────────
 
 class SettingsScreen(QWidget):
     def __init__(self):
         super().__init__()
+        self._current_section = 0
+        self._nav_btns: list[QPushButton] = []
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
@@ -2564,7 +3529,7 @@ class SettingsScreen(QWidget):
         for i, (icon, label) in enumerate(sections):
             btn = QPushButton(f"  {icon}  {label}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            active = i == 1
+            active = i == self._current_section
             btn.setStyleSheet(f"""
                 QPushButton {{
                     text-align: left; padding: 10px 12px;
@@ -2579,6 +3544,8 @@ class SettingsScreen(QWidget):
                     background: rgba(255,255,255,0.03);
                 }}
             """)
+            btn.clicked.connect(lambda checked, sec=i: self._set_section(sec))
+            self._nav_btns.append(btn)
             ll.addWidget(btn)
         ll.addStretch()
         main_layout.addWidget(left)
@@ -2603,37 +3570,65 @@ class SettingsScreen(QWidget):
         fields_grid.setSpacing(16)
         left_col = QVBoxLayout()
         left_col.setSpacing(16)
-        for label, value in [("Название", "GastroHub"), ("Телефон", "+7 (495) 123-45-67")]:
-            lv = QVBoxLayout()
-            lv.addWidget(make_label(label, 11, TEXT_MUTED))
-            inp = QLineEdit(value)
-            inp.setStyleSheet(f"""
-                background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-                padding: 10px 14px; font-size: 13px;
-            """)
-            lv.addWidget(inp)
-            left_col.addLayout(lv)
+
+        # Name field
+        nv = QVBoxLayout()
+        nv.addWidget(make_label("Название", 11, TEXT_MUTED))
+        self._restaurant_name_edit = QLineEdit("GastroHub")
+        self._restaurant_name_edit.setStyleSheet(f"""
+            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER}; border-radius: 8px;
+            padding: 10px 14px; font-size: 13px;
+        """)
+        nv.addWidget(self._restaurant_name_edit)
+        left_col.addLayout(nv)
+
+        # Phone field
+        pv = QVBoxLayout()
+        pv.addWidget(make_label("Телефон", 11, TEXT_MUTED))
+        self._restaurant_phone_edit = QLineEdit("+7 (495) 123-45-67")
+        self._restaurant_phone_edit.setStyleSheet(f"""
+            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER}; border-radius: 8px;
+            padding: 10px 14px; font-size: 13px;
+        """)
+        pv.addWidget(self._restaurant_phone_edit)
+        left_col.addLayout(pv)
 
         right_col = QVBoxLayout()
         right_col.setSpacing(16)
-        for label, value in [("Адрес", "Москва, ул. Тверская, 24"), ("Email", "info@gastrohub.ru")]:
-            lv = QVBoxLayout()
-            lv.addWidget(make_label(label, 11, TEXT_MUTED))
-            inp = QLineEdit(value)
-            inp.setStyleSheet(f"""
-                background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-                padding: 10px 14px; font-size: 13px;
-            """)
-            lv.addWidget(inp)
-            right_col.addLayout(lv)
+
+        # Address field
+        av = QVBoxLayout()
+        av.addWidget(make_label("Адрес", 11, TEXT_MUTED))
+        self._restaurant_address_edit = QLineEdit("Москва, ул. Тверская, 24")
+        self._restaurant_address_edit.setStyleSheet(f"""
+            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER}; border-radius: 8px;
+            padding: 10px 14px; font-size: 13px;
+        """)
+        av.addWidget(self._restaurant_address_edit)
+        right_col.addLayout(av)
+
+        # Email field
+        ev = QVBoxLayout()
+        ev.addWidget(make_label("Email", 11, TEXT_MUTED))
+        self._restaurant_email_edit = QLineEdit("info@gastrohub.ru")
+        self._restaurant_email_edit.setStyleSheet(f"""
+            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER}; border-radius: 8px;
+            padding: 10px 14px; font-size: 13px;
+        """)
+        ev.addWidget(self._restaurant_email_edit)
+        right_col.addLayout(ev)
 
         fields_grid.addLayout(left_col)
         fields_grid.addLayout(right_col)
         pl.addLayout(fields_grid)
         pl.addSpacing(16)
-        pl.addWidget(PrimaryButton("Сохранить изменения"))
+        save_btn = PrimaryButton("Сохранить изменения")
+        save_btn.clicked.connect(self._on_save_settings)
+        pl.addWidget(save_btn)
         rl.addWidget(profile_card)
 
         # Role permissions
@@ -2778,3 +3773,17 @@ class SettingsScreen(QWidget):
         rl.addWidget(paym_card)
 
         main_layout.addWidget(right, 1)
+
+    def _set_section(self, section_idx: int):
+        """Switch settings section."""
+        self._current_section = section_idx
+        self._setup_ui()
+
+    def _on_save_settings(self):
+        """Save settings (placeholder — reads fields and shows demo mode message)."""
+        name = self._restaurant_name_edit.text()
+        phone = self._restaurant_phone_edit.text()
+        address = self._restaurant_address_edit.text()
+        email = self._restaurant_email_edit.text()
+        QMessageBox.information(self, "Настройки",
+            "Изменения сохранены (демо-режим)")

@@ -111,6 +111,16 @@ def update_table_status(table_id: int, status: str):
         (status, table_id),
     )
 
+def update_table(table_id: int, **kwargs):
+    """Update table fields (table_number, seats_count, zone)."""
+    allowed = {"table_number", "seats_count", "zone"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = %s" for k in fields)
+    values = list(fields.values()) + [table_id]
+    execute(f"UPDATE restaurant_tables SET {set_clause} WHERE id = %s", values)
+
 
 # ─── CUSTOMERS ──────────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 """Главное окно приложения с навигацией."""
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
+    QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QMessageBox,
 )
 from PyQt6.QtCore import Qt
 
@@ -32,6 +32,7 @@ class MainWindow(QWidget):
         super().__init__()
         self._role: str | None = None
         self._current_screen = "dashboard"
+        self._pending_order_id = None
         self.setWindowTitle("GastroHub — Система управления рестораном")
         self.setStyleSheet(f"background: {BG_PRIMARY}; color: {TEXT_PRIMARY};")
 
@@ -76,6 +77,8 @@ class MainWindow(QWidget):
         right_layout.setSpacing(0)
 
         self._topbar = TopBar(self._role)
+        self._topbar.action_signal.connect(self._on_topbar_action)
+        self._topbar.logout_signal.connect(self._on_logout)
         right_layout.addWidget(self._topbar)
 
         # Screen stack
@@ -110,8 +113,31 @@ class MainWindow(QWidget):
             self._screens[screen_id] = screen
             self._screen_stack.addWidget(screen)
 
-    def _navigate(self, screen_id: str):
+    def _on_topbar_action(self, action: str):
+        if action == "create-order":
+            self._navigate("new-order")
+        elif action == "create-report":
+            self._navigate("reports")
+
+    def _on_logout(self):
+        """Return to the login screen."""
+        reply = QMessageBox.question(
+            self, "Выход",
+            "Вы уверены, что хотите выйти?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._stack.setCurrentWidget(self._login)
+
+    def _navigate(self, screen_id: str, order_id=None):
+        """Перейти на экран. Если order_id указан, передать его экрану."""
+        self._pending_order_id = order_id
         if screen_id in self._screens:
             self._current_screen = screen_id
-            self._screen_stack.setCurrentWidget(self._screens[screen_id])
+            screen = self._screens[screen_id]
+            # Передать order_id детальному экрану заказа
+            if isinstance(screen, OrderDetailsScreen) and order_id is not None:
+                screen.load_order(order_id)
+            self._screen_stack.setCurrentWidget(screen)
             self._sidebar.set_current(screen_id)
