@@ -164,6 +164,9 @@ def update_customer(cust_id: int, **kwargs):
     values = list(fields.values()) + [cust_id]
     execute(f"UPDATE customers SET {set_clause} WHERE id = %s", values)
 
+def delete_customer(cust_id: int):
+    execute("DELETE FROM customers WHERE id = %s", (cust_id,))
+
 
 # ─── ORDERS ─────────────────────────────────────────────────────
 
@@ -222,6 +225,32 @@ def cancel_order(order_id: int):
         "UPDATE orders SET status = 'cancelled', closed_at = NOW() WHERE id = %s",
         (order_id,),
     )
+
+def update_order(order_id: int, **kwargs):
+    """Update order fields (table_id, customer_id, comment)."""
+    allowed = {"table_id", "customer_id", "comment"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k} = %s" for k in fields)
+    values = list(fields.values()) + [order_id]
+    execute(f"UPDATE orders SET {set_clause} WHERE id = %s", values)
+
+def recalculate_order_totals(order_id: int):
+    """Recalculate total_amount and final_amount for an order based on its items."""
+    items = fetch_all(
+        "SELECT COALESCE(SUM(price_at_order * quantity), 0) AS total FROM order_items WHERE order_id = %s",
+        (order_id,),
+    )
+    total = float(items[0]["total"]) if items else 0
+    order = fetch_one("SELECT discount_amount FROM orders WHERE id = %s", (order_id,))
+    discount = float(order["discount_amount"]) if order else 0
+    final = total - discount
+    execute(
+        "UPDATE orders SET total_amount = %s, final_amount = %s WHERE id = %s",
+        (total, final, order_id),
+    )
+    return total, final
 
 
 # ─── ORDER ITEMS ────────────────────────────────────────────────

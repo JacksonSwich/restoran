@@ -16,12 +16,7 @@ class LoginScreen(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            background: {BG_PRIMARY};
-            background-image:
-                radial-gradient(circle at 20% 50%, rgba(201,164,92,0.04) 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, rgba(31,111,80,0.04) 0%, transparent 50%);
-        """)
+        self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
     def _setup_ui(self):

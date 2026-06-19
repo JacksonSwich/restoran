@@ -15,7 +15,7 @@ from ui.styles import *
 def make_label(text: str, size: int = 13, color: str = TEXT_PRIMARY,
                weight: int = QFont.Weight.Normal, family: str = "Inter") -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(f"color: {color}; background: transparent; font-size: {size}px;")
+    lbl.setStyleSheet(f"color: {color}; background: transparent; font-size: {size}px; border: none; padding: 0; margin: 0;")
     f = lbl.font()
     f.setPointSize(size)
     f.setWeight(weight)

@@ -1,5 +1,7 @@
 """Все экраны приложения."""
 
+import json
+import os
 from datetime import datetime
 from functools import partial
 
@@ -10,7 +12,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QMessageBox, QDialog,
     QDialogButtonBox, QFormLayout, QGroupBox, QCheckBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor
 
 from ui.styles import *
@@ -24,6 +26,8 @@ from database.queries import *
 
 # Module-level variable for passing order_id to OrderDetailsScreen
 _order_details_pending_id: int | None = None
+# Module-level variable for passing selected customer to NewOrderScreen
+_selected_customer_for_order: dict | None = None
 
 
 def _navigate_to_order(navigate_fn, order_id):
@@ -41,11 +45,35 @@ class AdminDashboard(QWidget):
         super().__init__()
         self._navigate = on_navigate
         self.setStyleSheet(f"background: {BG_PRIMARY};")
-        self._setup_ui()
+        self._built = False
+        self._loading_widget = None
+        self._main_layout = QVBoxLayout(self)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._show_loading()
+        QTimer.singleShot(0, self._build_content)
 
-    def _setup_ui(self):
+    def _show_loading(self):
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(28, 28, 28, 28)
+        l.addWidget(make_manrope_label("Главная", 24, QFont.Weight.ExtraBold))
+        l.addWidget(make_label("Загрузка данных...", 13, TEXT_MUTED))
+        l.addStretch()
+        self._loading_widget = w
+        self._main_layout.addWidget(w)
+
+    def _build_content(self):
+        if self._built:
+            return
+        self._built = True
+        if self._loading_widget:
+            self._main_layout.removeWidget(self._loading_widget)
+            self._loading_widget.deleteLater()
+            self._loading_widget = None
+
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content = QWidget()
@@ -54,32 +82,43 @@ class AdminDashboard(QWidget):
         layout.setSpacing(24)
 
         # Header
+        today_str = datetime.now().strftime("%d %B %Y").lstrip("0")
+        month_names = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                       "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+        now = datetime.now()
+        date_str = f"{now.day} {month_names[now.month-1]} {now.year}"
         header = QVBoxLayout()
         header.addWidget(make_manrope_label("Главная", 24, QFont.Weight.ExtraBold))
-        header.addWidget(make_label("Операционная сводка · 18 июня 2026", 13, TEXT_MUTED))
+        header.addWidget(make_label(f"Операционная сводка · {date_str}", 13, TEXT_MUTED))
         layout.addLayout(header)
 
         # Stats
         stats_grid = QHBoxLayout()
         stats_grid.setSpacing(16)
 
-        # Загружаем данные
         try:
             active_orders = get_active_orders()
             paid_orders = get_orders_by_status("paid")
             all_tables = get_all_tables()
+            all_orders = get_all_orders()
             occupied_count = sum(1 for t in all_tables if t["status"] == "occupied")
             total_tables = len(all_tables)
+            today_total = sum(float(o.get("final_amount", 0) or 0) for o in paid_orders)
+            today_orders = len(paid_orders)
+            avg_check = today_total / today_orders if today_orders > 0 else 0
         except:
             active_orders = []
             paid_orders = []
             occupied_count = 0
             total_tables = 0
+            today_total = 0
+            today_orders = 0
+            avg_check = 0
 
         stats = [
-            ("Выручка за день", "127 400 ₽", "+14% к вчера", GOLD),
-            ("Количество заказов", "84", "сегодня", INFO),
-            ("Средний чек", "1 517 ₽", "+5% к вчера", WARNING),
+            ("Выручка за день", f"{today_total:,.0f} ₽".replace(",", " "), "за сегодня", GOLD),
+            ("Количество заказов", str(today_orders), "сегодня", INFO),
+            ("Средний чек", f"{avg_check:,.0f} ₽".replace(",", " "), "", WARNING),
             ("Активные заказы", str(len(active_orders)), "", "#9B6CDD"),
             ("Занятые столики", f"{occupied_count}/{total_tables}", "", WARNING),
             ("Оплаченные заказы", str(len(paid_orders)), "сегодня", SUCCESS),
@@ -92,7 +131,7 @@ class AdminDashboard(QWidget):
         charts_row = QHBoxLayout()
         charts_row.setSpacing(20)
 
-        # Revenue chart (simplified as table data)
+        # Revenue chart
         rev_card = Card()
         rl = QVBoxLayout(rev_card)
         rl.setContentsMargins(24, 24, 24, 24)
@@ -109,27 +148,39 @@ class AdminDashboard(QWidget):
         except:
             rev_data = []
 
-        week_data = [
-            ("Пн", "48 200 ₽", 32), ("Вт", "52 100 ₽", 38),
-            ("Ср", "61 400 ₽", 45), ("Чт", "58 900 ₽", 41),
-            ("Пт", "74 300 ₽", 54), ("Сб", "89 200 ₽", 68),
-            ("Вс", "42 800 ₽", 30),
-        ]
-        for day, rev, cnt in week_data:
+        rev_days = []
+        if rev_data:
+            for r in rev_data[:7]:
+                day_name = str(r.get("payment_date", ""))
+                rev = float(r.get("total", 0))
+                orders = int(r.get("order_count", 0))
+                rev_days.append((day_name, rev, orders))
+            max_orders = max((d[2] for d in rev_days), default=1) or 1
+        else:
+            max_orders = 1
+
+        for day, rev_val, cnt in rev_days if rev_days else []:
             row = QHBoxLayout()
-            row.addWidget(make_label(day, 13, TEXT_PRIMARY, QFont.Weight.Medium))
-            row.addWidget(make_label(rev, 13, GOLD, QFont.Weight.Bold))
+            row.addWidget(make_label(str(day)[:3], 13, TEXT_PRIMARY, QFont.Weight.Medium))
+            row.addWidget(make_label(f"{rev_val:,.0f} ₽".replace(",", " "), 13, GOLD, QFont.Weight.Bold))
             row.addWidget(make_label(str(cnt), 13, TEXT_SECONDARY))
             rl.addLayout(row)
-            # Progress bar
+            bar_row = QHBoxLayout()
+            bar_row.setSpacing(6)
             bar = QFrame()
             bar.setFixedHeight(4)
-            pct = cnt * 100 // 68
+            pct = (cnt * 100 // max_orders) if max_orders else 0
             bar.setStyleSheet(f"""
-                background: {BORDER};
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {GOLD}, stop:1 rgba(201,164,92,0.2));
                 border-radius: 2px;
+                max-width: {pct}%;
             """)
-            rl.addWidget(bar)
+            bar_row.addWidget(bar)
+            rl.addLayout(bar_row)
+
+        if not rev_days:
+            rl.addWidget(make_label("Нет данных за последние дни", 13, TEXT_MUTED))
 
         charts_row.addWidget(rev_card, 2)
 
@@ -145,21 +196,27 @@ class AdminDashboard(QWidget):
         except:
             pop_dishes = []
 
-        sample_popular = [
-            ("Стейк Рибай", 124), ("Паста Карбонара", 98),
-            ("Лосось на гриле", 87), ("Цезарь с курицей", 76),
-            ("Тирамису", 65),
-        ]
-        for name, cnt in sample_popular:
-            pl.addWidget(make_label(name, 13, TEXT_PRIMARY))
-            bar = QFrame()
-            bar.setFixedHeight(4)
-            pct = cnt * 100 // 124
-            bar.setStyleSheet(f"""
-                background: {BORDER};
-                border-radius: 2px;
-            """)
-            pl.addWidget(bar)
+        if pop_dishes:
+            max_cnt = max((int(d.get("order_count", 0)) for d in pop_dishes), default=1) or 1
+            for d in pop_dishes:
+                name = d.get("name", "—")
+                cnt = int(d.get("order_count", 0))
+                pct = cnt * 100 // max_cnt
+                pl.addWidget(make_label(f"{name} · {cnt} заказов", 13, TEXT_PRIMARY))
+                bar_row = QHBoxLayout()
+                bar_row.setSpacing(6)
+                bar = QFrame()
+                bar.setFixedHeight(4)
+                bar.setStyleSheet(f"""
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 {GOLD}, stop:1 rgba(201,164,92,0.2));
+                    border-radius: 2px;
+                    max-width: {pct}%;
+                """)
+                bar_row.addWidget(bar)
+                pl.addLayout(bar_row)
+        else:
+            pl.addWidget(make_label("Нет данных о популярности блюд", 13, TEXT_MUTED))
 
         charts_row.addWidget(pop_card, 1)
         layout.addLayout(charts_row)
@@ -198,14 +255,11 @@ class AdminDashboard(QWidget):
                 table.setItem(i, 4, QTableWidgetItem(f"{float(o['final_amount']):,.0f} ₽".replace(",", " ")))
                 table.setItem(i, 5, QTableWidgetItem("—"))
                 table.setItem(i, 6, QTableWidgetItem(str(o.get("created_at", ""))))
-        table.setMaximumHeight(400)
         tl.addWidget(table)
         layout.addWidget(table_card)
 
         scroll.setWidget(content)
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        self._main_layout.addWidget(scroll)
 
 
 # ─── Рабочее место официанта ───────────────────────────────────
@@ -249,7 +303,24 @@ def _make_order_card(order: dict, highlight: bool = False, on_open=None) -> QFra
     # Elapsed time
     elapsed = QHBoxLayout()
     elapsed.addWidget(QLabel("⏱"))
-    elapsed.addWidget(make_label("~30 мин назад", 12, TEXT_MUTED))
+    created = order.get("created_at", "")
+    elapsed_str = "только что"
+    if created and created != "":
+        try:
+            created_dt = created if isinstance(created, datetime) else datetime.strptime(str(created)[:19], "%Y-%m-%d %H:%M:%S")
+            delta = datetime.now() - created_dt
+            mins = int(delta.total_seconds() // 60)
+            if mins < 1:
+                elapsed_str = "только что"
+            elif mins < 60:
+                elapsed_str = f"~{mins} мин назад"
+            elif mins < 1440:
+                elapsed_str = f"~{mins // 60} ч назад"
+            else:
+                elapsed_str = f"~{mins // 1440} дн назад"
+        except:
+            elapsed_str = str(created)[:10] if created else "—"
+    elapsed.addWidget(make_label(elapsed_str, 12, TEXT_MUTED))
     cl.addLayout(elapsed)
 
     # Bottom: amount + open button
@@ -280,11 +351,35 @@ class WaiterWorkspace(QWidget):
         super().__init__()
         self._navigate = on_navigate
         self.setStyleSheet(f"background: {BG_PRIMARY};")
-        self._setup_ui()
+        self._built = False
+        self._loading_widget = None
+        self._main_layout = QVBoxLayout(self)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._show_loading()
+        QTimer.singleShot(0, self._build_content)
 
-    def _setup_ui(self):
+    def _show_loading(self):
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(28, 28, 28, 28)
+        l.addWidget(make_manrope_label("Рабочее место", 24, QFont.Weight.ExtraBold))
+        l.addWidget(make_label("Загрузка данных...", 13, TEXT_MUTED))
+        l.addStretch()
+        self._loading_widget = w
+        self._main_layout.addWidget(w)
+
+    def _build_content(self):
+        if self._built:
+            return
+        self._built = True
+        if self._loading_widget:
+            self._main_layout.removeWidget(self._loading_widget)
+            self._loading_widget.deleteLater()
+            self._loading_widget = None
+
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content = QWidget()
@@ -308,7 +403,20 @@ class WaiterWorkspace(QWidget):
         header = QHBoxLayout()
         hleft = QVBoxLayout()
         hleft.addWidget(make_manrope_label("Рабочее место", 24, QFont.Weight.ExtraBold))
-        hleft.addWidget(make_label("Добрый вечер · 18 июня 2026", 13, TEXT_MUTED))
+        hour_now = datetime.now().hour
+        if 5 <= hour_now < 12:
+            greeting = "Доброе утро"
+        elif 12 <= hour_now < 17:
+            greeting = "Добрый день"
+        elif 17 <= hour_now < 22:
+            greeting = "Добрый вечер"
+        else:
+            greeting = "Доброй ночи"
+        month_names = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                       "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+        now = datetime.now()
+        date_str = f"{now.day} {month_names[now.month-1]} {now.year}"
+        hleft.addWidget(make_label(f"{greeting} · {date_str}", 13, TEXT_MUTED))
         header.addLayout(hleft)
         header.addStretch()
         new_btn = QPushButton("➕ Создать заказ")
@@ -323,7 +431,7 @@ class WaiterWorkspace(QWidget):
         header.addWidget(new_btn)
         layout.addLayout(header)
 
-        # Summary cards (с иконками — как в React)
+        # Summary cards
         summary = QHBoxLayout()
         summary.setSpacing(16)
         for icon_text, label, value, color in [
@@ -334,29 +442,36 @@ class WaiterWorkspace(QWidget):
         ]:
             card = QFrame()
             card.setStyleSheet(f"""
-                background: {BG_CARD};
-                border: 1px solid {BORDER};
-                border-radius: 12px;
+                QFrame {{
+                    background: {BG_CARD};
+                    border: 1px solid {BORDER};
+                    border-radius: 14px;
+                }}
+                QFrame:hover {{
+                    border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.4);
+                }}
             """)
             cl = QHBoxLayout(card)
             cl.setContentsMargins(20, 20, 20, 20)
             cl.setSpacing(16)
-            # Icon box
+
             icon_frame = QFrame()
             icon_frame.setFixedSize(48, 48)
             icon_frame.setStyleSheet(f"""
-                background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.07);
-                border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.13);
-                border-radius: 12px;
+                QFrame {{
+                    background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.1);
+                    border-radius: 14px;
+                }}
             """)
             il = QVBoxLayout(icon_frame)
             il.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl = QLabel(icon_text)
-            lbl.setStyleSheet(f"font-size: 22px; background: transparent;")
-            il.addWidget(lbl)
+            ilbl = QLabel(icon_text)
+            ilbl.setStyleSheet(f"font-size: 22px; background: transparent; border: none;")
+            il.addWidget(ilbl)
             cl.addWidget(icon_frame)
-            # Value + label
+
             vl = QVBoxLayout()
+            vl.setSpacing(2)
             vl.addWidget(make_manrope_label(value, 28, QFont.Weight.ExtraBold, TEXT_PRIMARY))
             vl.addWidget(make_label(label, 12, TEXT_SECONDARY))
             cl.addLayout(vl)
@@ -364,20 +479,22 @@ class WaiterWorkspace(QWidget):
             summary.addWidget(card)
         layout.addLayout(summary)
 
-        # Ready orders section (как в React — с зелёным хайлайтом)
+        # Ready orders section
         if ready_orders:
             ready_header = QHBoxLayout()
             ready_header.addWidget(make_manrope_label("Готовы к подаче", 16, QFont.Weight.Bold))
             count_badge = QFrame()
-            count_badge.setFixedSize(30, 22)
+            count_badge.setFixedHeight(22)
             count_badge.setStyleSheet(f"""
-                background: rgba(63,166,107,0.15);
-                border: 1px solid rgba(63,166,107,0.25);
-                border-radius: 11px;
+                QFrame {{
+                    background: rgba(63,166,107,0.12);
+                    border-radius: 11px;
+                    padding: 0 10px;
+                }}
             """)
-            cbl = QVBoxLayout(count_badge)
+            cbl = QHBoxLayout(count_badge)
+            cbl.setContentsMargins(10, 0, 10, 0)
             cbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cbl.setContentsMargins(6, 0, 6, 0)
             cbl.addWidget(make_label(str(len(ready_orders)), 12, SUCCESS, QFont.Weight.Bold))
             ready_header.addWidget(count_badge)
             ready_header.addStretch()
@@ -396,16 +513,17 @@ class WaiterWorkspace(QWidget):
         active_section = QHBoxLayout()
         active_section.addWidget(make_manrope_label("Активные заказы", 16, QFont.Weight.Bold))
         count_badge2 = QFrame()
-        count_badge2.setFixedSize(30, 22)
+        count_badge2.setFixedHeight(22)
         count_badge2.setStyleSheet(f"""
-            background: rgba(74,123,208,0.15);
-            border: 1px solid rgba(74,123,208,0.25);
-            border-radius: 11px;
+            QFrame {{
+                background: {BG_ELEVATED};
+                border-radius: 11px;
+            }}
         """)
-        cbl2 = QVBoxLayout(count_badge2)
+        cbl2 = QHBoxLayout(count_badge2)
+        cbl2.setContentsMargins(10, 0, 10, 0)
         cbl2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cbl2.setContentsMargins(6, 0, 6, 0)
-        cbl2.addWidget(make_label(str(len(working_orders)), 12, INFO, QFont.Weight.Bold))
+        cbl2.addWidget(make_label(str(len(working_orders)), 12, TEXT_MUTED, QFont.Weight.Bold))
         active_section.addWidget(count_badge2)
         active_section.addStretch()
         layout.addLayout(active_section)
@@ -422,14 +540,44 @@ class WaiterWorkspace(QWidget):
         else:
             empty_frame = QFrame()
             empty_frame.setStyleSheet(f"""
-                background: {BG_CARD};
-                border: 1px dashed {BORDER};
-                border-radius: 12px;
+                QFrame {{
+                    background: {BG_CARD};
+                    border: 1px dashed rgba(111, 117, 111, 0.3);
+                    border-radius: 12px;
+                }}
             """)
-            empty_frame.setMinimumHeight(80)
+            empty_frame.setMinimumHeight(140)
             el = QVBoxLayout(empty_frame)
             el.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            el.addWidget(make_label("Нет активных заказов", 14, TEXT_MUTED))
+            el.setSpacing(12)
+            empty_icon = QLabel("📋")
+            empty_icon.setStyleSheet("font-size: 40px; background: transparent; border: none;")
+            empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            el.addWidget(empty_icon)
+            el.addWidget(make_manrope_label("Нет активных заказов", 15, QFont.Weight.DemiBold, TEXT_SECONDARY))
+            if self._navigate:
+                create_first_btn = QPushButton("➕ Создать первый заказ")
+                create_first_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                create_first_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        color: {GOLD};
+                        border: 1px solid rgba(201,164,92,0.3);
+                        border-radius: 8px;
+                        font-size: 13px;
+                        font-weight: 600;
+                        padding: 8px 18px;
+                    }}
+                    QPushButton:hover {{
+                        background: rgba(201,164,92,0.08);
+                        border-color: {GOLD};
+                    }}
+                """)
+                create_first_btn.clicked.connect(lambda: self._navigate("new-order"))
+                btn_container = QHBoxLayout()
+                btn_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                btn_container.addWidget(create_first_btn)
+                el.addLayout(btn_container)
             layout.addWidget(empty_frame)
 
         # Tables quick view
@@ -449,35 +597,70 @@ class WaiterWorkspace(QWidget):
         except:
             tables = []
 
+        def _table_pluralize(n: int) -> str:
+            if n % 10 == 1 and n % 100 != 11:
+                return "место"
+            if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
+                return "места"
+            return "мест"
+
         for t in tables[:10]:
             cfg = TABLE_STATUS_CONFIG.get(t["status"], {})
             color = cfg.get("color", DISABLED)
             card = QFrame()
             card.setStyleSheet(f"""
-                background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.06);
-                border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.2);
-                border-radius: 10px;
+                QFrame {{
+                    background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.06);
+                    border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.2);
+                    border-radius: 12px;
+                }}
+                QFrame:hover {{
+                    border: 1px solid {GOLD};
+                }}
             """)
             card.setCursor(Qt.CursorShape.PointingHandCursor)
             if self._navigate:
                 card.mousePressEvent = lambda ev, nav=self._navigate: nav("tables") if ev.button() == Qt.MouseButton.LeftButton else None
             cl = QVBoxLayout(card)
             cl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cl.setSpacing(4)
-            cl.addWidget(make_manrope_label(str(t["table_number"]), 20, QFont.Weight.ExtraBold))
-            cl.addWidget(make_label(f"{t['seats_count']} мест", 10, TEXT_MUTED))
-            cl.addSpacing(2)
-            # Small status badge text
-            badge_lbl = make_label(cfg.get("label", ""), 9, color, QFont.Weight.Bold)
-            badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cl.addWidget(badge_lbl)
+            cl.setSpacing(6)
+
+            # Table icon
+            table_icon = QLabel("⊞")
+            table_icon.setStyleSheet(f"font-size: 22px; color: {TEXT_MUTED}; background: transparent; border: none;")
+            table_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cl.addWidget(table_icon)
+
+            # Table number — no border
+            num_lbl = make_manrope_label(str(t["table_number"]), 24, QFont.Weight.ExtraBold, TEXT_PRIMARY)
+            cl.addWidget(num_lbl)
+
+            # Seats — no border, fixed pluralization
+            seats = t['seats_count']
+            cl.addWidget(make_label(
+                f"{seats} {_table_pluralize(seats)}", 11, TEXT_MUTED
+            ))
+
+            # Status badge at bottom
+            badge_frame = QFrame()
+            badge_frame.setStyleSheet(f"""
+                QFrame {{
+                    background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.12);
+                    border: none;
+                    border-radius: 10px;
+                    padding: 4px 12px;
+                }}
+            """)
+            bl = QHBoxLayout(badge_frame)
+            bl.setContentsMargins(10, 3, 10, 3)
+            bl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            bl.addWidget(make_label(cfg.get("label", ""), 10, color, QFont.Weight.Bold))
+            cl.addWidget(badge_frame)
             tables_grid.addWidget(card)
         layout.addLayout(tables_grid)
 
         scroll.setWidget(content)
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(scroll)
+        self._main_layout.addWidget(scroll)
 
 
 # ─── Столики ────────────────────────────────────────────────────
@@ -511,7 +694,20 @@ class TableEditDialog(QDialog):
         layout.addRow("Количество мест:", self._seats_spin)
 
         self._zone_combo = QComboBox()
-        self._zone_combo.addItems(["Основной зал", "VIP-зона", "Терраса"])
+        # Load zones from file or use defaults
+        try:
+            zones_file = os.path.join(os.path.dirname(__file__), "..", "restaurant_zones.json")
+            if os.path.exists(zones_file):
+                with open(zones_file, encoding="utf-8") as zf:
+                    zone_data = json.load(zf)
+                if zone_data:
+                    self._zone_combo.addItems(zone_data)
+                else:
+                    self._zone_combo.addItems(["Основной зал", "VIP-зона", "Терраса"])
+            else:
+                self._zone_combo.addItems(["Основной зал", "VIP-зона", "Терраса"])
+        except:
+            self._zone_combo.addItems(["Основной зал", "VIP-зона", "Терраса"])
         if not is_new and table.get("zone"):
             idx = self._zone_combo.findText(table["zone"])
             if idx >= 0:
@@ -675,6 +871,7 @@ class TablesScreen(QWidget):
     def _setup_ui(self):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content = QWidget()
@@ -951,9 +1148,18 @@ class NewOrderScreen(QWidget):
         self._selected_table_id = None
         self._customer_name = ""
         self._discount = 0
-        self._active_category = "Горячие блюда"
+        self._active_category = ""
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        global _selected_customer_for_order
+        if _selected_customer_for_order is not None:
+            name = _selected_customer_for_order.get("full_name", "")
+            self._customer_input.setText(name)
+            self._customer_name = name
+            _selected_customer_for_order = None
 
     def _setup_ui(self):
         main_layout = QHBoxLayout(self)
@@ -1033,7 +1239,13 @@ class NewOrderScreen(QWidget):
         cat_layout.setContentsMargins(20, 0, 20, 0)
         cat_layout.setSpacing(0)
 
-        categories = ["Салаты", "Супы", "Горячие блюда", "Напитки", "Десерты", "Закуски"]
+        try:
+            db_categories = [c["name"] for c in get_all_categories()]
+        except:
+            db_categories = []
+        categories = db_categories if db_categories else ["Все блюда"]
+        if not self._active_category and categories:
+            self._active_category = categories[0]
         for cat in categories:
             btn = QPushButton(cat)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1041,8 +1253,8 @@ class NewOrderScreen(QWidget):
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none;
-                    border-bottom: 2px solid {'{GOLD}' if active else 'transparent'};
-                    color: {'{GOLD}' if active else '{TEXT_SECONDARY}'};
+                    border-bottom: 2px solid {GOLD if active else 'transparent'};
+                    color: {GOLD if active else TEXT_SECONDARY};
                     font-size: 13px; font-weight: {'600' if active else '400'};
                     padding: 14px 16px;
                 }}
@@ -1074,7 +1286,8 @@ class NewOrderScreen(QWidget):
         # Dishes grid
         self._dishes_scroll = QScrollArea()
         self._dishes_scroll.setWidgetResizable(True)
-        self._dishes_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._dishes_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._dishes_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._dishes_container = QWidget()
         self._dishes_grid = QGridLayout(self._dishes_container)
         self._dishes_grid.setSpacing(12)
@@ -1101,7 +1314,8 @@ class NewOrderScreen(QWidget):
 
         self._cart_scroll = QScrollArea()
         self._cart_scroll.setWidgetResizable(True)
-        self._cart_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._cart_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._cart_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         self._cart_items = QWidget()
         self._cart_items_layout = QVBoxLayout(self._cart_items)
         self._cart_items_layout.setContentsMargins(16, 12, 16, 12)
@@ -1174,9 +1388,11 @@ class NewOrderScreen(QWidget):
     def _make_dish_card(self, dish: dict) -> QFrame:
         available = dish.get("is_available", True)
         card = QFrame()
+        bg = BG_CARD if available else '#1A1D21'
+        bd = BORDER if available else '#252932'
         card.setStyleSheet(f"""
-            background: {{BG_CARD if available else '#1A1D21'}};
-            border: 1px solid {{BORDER if available else '#252932'}};
+            background: {bg};
+            border: 1px solid {bd};
             border-radius: 12px;
         """)
         card.setMinimumSize(200, 140)
@@ -1372,12 +1588,13 @@ class NewOrderScreen(QWidget):
 
     def _on_customer_changed(self, text: str):
         self._customer_name = text
+        # Clear discount layout
+        while self._discount_layout.count():
+            item = self._discount_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         if text.strip():
             # Show discount input
-            while self._discount_layout.count():
-                item = self._discount_layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
             self._discount_layout.addWidget(make_label("Скидка (%)", 11, TEXT_MUTED))
             self._discount_spin = QSpinBox()
             self._discount_spin.setRange(0, 30)
@@ -1559,6 +1776,7 @@ class OrderDetailsScreen(QWidget):
         """Create the scroll skeleton and back button (persistent)."""
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         outer = QWidget()
@@ -2005,13 +2223,21 @@ class OrderDetailsScreen(QWidget):
     # ─── Placeholder handlers (admin) ────────────────────────────
 
     def _on_edit_order(self):
-        QMessageBox.information(self, "Инфо", "Редактирование заказа (в разработке)")
+        if self._current_order is None:
+            return
+        dlg = OrderEditDialog(self._current_order, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._refresh()
 
     def _on_view_payment(self):
-        QMessageBox.information(self, "Инфо", "Просмотр оплаты (в разработке)")
+        if self._current_order is None:
+            return
+        dlg = PaymentViewDialog(self._current_order, self)
+        dlg.exec()
 
     def _on_view_history(self):
-        QMessageBox.information(self, "Инфо", "История изменений (в разработке)")
+        dlg = OrderHistoryDialog(self)
+        dlg.exec()
 
 
 # ─── Список заказов ─────────────────────────────────────────────
@@ -2546,7 +2772,8 @@ class MenuScreen(QWidget):
         # Dishes grid
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
         grid_widget = QWidget()
         self._grid = QGridLayout(grid_widget)
         self._grid.setSpacing(14)
@@ -2627,9 +2854,11 @@ class MenuScreen(QWidget):
     def _make_dish_card(self, dish: dict) -> QFrame:
         available = dish.get("is_available", True)
         card = QFrame()
+        bg = BG_CARD if available else '#1A1D21'
+        bd = BORDER if available else '#252932'
         card.setStyleSheet(f"""
-            background: {BG_CARD if available else '#1A1D21'};
-            border: 1px solid {BORDER if available else '#252932'};
+            background: {bg};
+            border: 1px solid {bd};
             border-radius: 12px;
         """)
         card.setMinimumSize(260, 160)
@@ -2752,18 +2981,71 @@ class CustomerEditDialog(QDialog):
         }
 
 
+# ─── Helper functions for CustomersScreen ──────────────────────────
+
+AVATAR_PALETTE = [
+    "#C9A45C", "#3FA66B", "#4A7BD0", "#D98A35", "#9B6CDD",
+    "#E06060", "#5CB8C9", "#C97B5C", "#7BC96C", "#C96CB8",
+    "#5CA0C9", "#C96C6C", "#6CC9A4", "#A06CC9", "#C9A46C",
+    "#6C8CC9", "#C9A46C", "#4A9BD0", "#D07A4A", "#7A6CC9",
+]
+
+
+def _avatar_color(name: str) -> str:
+    """Deterministic pastel color from customer name."""
+    idx = abs(hash(name or "")) % len(AVATAR_PALETTE)
+    return AVATAR_PALETTE[idx]
+
+
+def _pluralize(count: int, forms: tuple[str, str, str]) -> str:
+    """Russian pluralization: 1 клиент, 2 клиента, 5 клиентов."""
+    if count % 10 == 1 and count % 100 != 11:
+        return forms[0]
+    if 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+        return forms[1]
+    return forms[2]
+
+
+MONTHS_RU = ["янв", "фев", "мар", "апр", "мая", "июн",
+             "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _format_date(iso_date) -> str:
+    """Convert ISO date → '19 июн 2025'."""
+    if not iso_date:
+        return "—"
+    try:
+        if isinstance(iso_date, str):
+            dt = datetime.fromisoformat(iso_date)
+        else:
+            dt = iso_date
+        return f"{dt.day} {MONTHS_RU[dt.month - 1]} {dt.year}"
+    except Exception:
+        return str(iso_date)
+
+
 class CustomersScreen(QWidget):
-    def __init__(self, role: str = "admin"):
+    def __init__(self, role: str = "admin", on_navigate=None):
         super().__init__()
         self._role = role
+        self._on_navigate = on_navigate
         self._search = ""
+        self._page_size = 10
+        self._visible_count = self._page_size
+        self._scroll: QScrollArea | None = None
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
     def _setup_ui(self):
+        if self._scroll:
+            self._scroll.deleteLater()
+            self._scroll = None
+
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._scroll = scroll
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -2771,165 +3053,406 @@ class CustomersScreen(QWidget):
         layout.setSpacing(20)
 
         if self._role == "waiter":
-            # Simplified waiter view
-            layout.addWidget(make_manrope_label("Клиенты", 24, QFont.Weight.ExtraBold))
-            layout.addWidget(make_label("Поиск и выбор клиента", 13, TEXT_MUTED))
-
-            search = QLineEdit()
-            search.setPlaceholderText("🔍 Найти клиента по имени или телефону")
-            search.setStyleSheet(f"""
-                background: {BG_CARD}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-                padding: 12px 12px 12px 40px; font-size: 14px;
-                max-width: 480px;
-            """)
-            search.textChanged.connect(lambda t: self._set_search(t))
-            layout.addWidget(search)
-
-            create_customer_btn = PrimaryButton("👤 Создать клиента")
-            create_customer_btn.clicked.connect(self._on_create_customer)
-            header_actions = QHBoxLayout()
-            header_actions.addWidget(create_customer_btn)
-            header_actions.addStretch()
-            layout.addLayout(header_actions)
-
-            try:
-                customers = get_all_customers() if not self._search else find_customers(self._search)
-            except:
-                customers = []
-
-            for c in customers[:8]:
-                card = Card()
-                cl = QHBoxLayout(card)
-                cl.setContentsMargins(16, 16, 16, 16)
-                cl.setSpacing(14)
-
-                avatar = QLabel(c["full_name"][0] if c.get("full_name") else "?")
-                avatar.setFixedSize(40, 40)
-                avatar.setStyleSheet(f"""
-                    background: {BG_ELEVATED}; border: 2px solid {BORDER};
-                    border-radius: 20px; font-size: 14px; font-weight: 700;
-                    color: {GOLD};
-                """)
-                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                cl.addWidget(avatar)
-
-                vi = QVBoxLayout()
-                vi.addWidget(make_label(c.get("full_name", "—"), 14, TEXT_PRIMARY, QFont.Weight.DemiBold))
-                vi.addWidget(make_label(c.get("phone", ""), 12, TEXT_SECONDARY))
-                cl.addLayout(vi)
-                cl.addStretch()
-
-                if float(c.get("discount_percent", 0)) > 0:
-                    disc_badge = QPushButton(f"−{float(c['discount_percent']):.0f}%")
-                    disc_badge.setStyleSheet(f"""
-                        background: rgba(201,164,92,0.1);
-                        border: 1px solid rgba(201,164,92,0.2);
-                        border-radius: 20px;
-                        color: {GOLD}; font-size: 12px; font-weight: 600;
-                        padding: 3px 10px;
-                    """)
-                    cl.addWidget(disc_badge)
-
-                select_btn = SecondaryButton("Выбрать клиента")
-                select_btn.clicked.connect(lambda checked, cust=c: self._on_select_customer(cust))
-                cl.addWidget(select_btn)
-                layout.addWidget(card)
+            self._build_waiter_view(layout)
         else:
-            # Admin full view
-            header = QHBoxLayout()
-            hleft = QVBoxLayout()
-            try:
-                customers = get_all_customers()
-            except:
-                customers = []
-            hleft.addWidget(make_manrope_label("Клиенты", 24, QFont.Weight.ExtraBold))
-            hleft.addWidget(make_label(f"{len(customers)} клиентов в базе", 13, TEXT_MUTED))
-            header.addLayout(hleft)
-            header.addStretch()
-            add_customer_btn = PrimaryButton("➕ Добавить клиента")
-            add_customer_btn.clicked.connect(self._on_create_customer)
-            header.addWidget(add_customer_btn)
-            layout.addLayout(header)
-
-            search = QLineEdit()
-            search.setPlaceholderText("🔍 Поиск по имени, телефону или email")
-            search.setStyleSheet(f"""
-                background: {BG_CARD}; color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-                padding: 9px 12px 9px 36px; font-size: 13px;
-                max-width: 400px;
-            """)
-            search.textChanged.connect(lambda t: self._set_search(t))
-            layout.addWidget(search)
-
-            table = DataTable(["Имя", "Телефон", "Email", "Скидка", "Кол-во заказов", "Общая сумма", "Последний заказ", ""])
-            table.setRowCount(len(customers))
-            for i, c in enumerate(customers):
-                # Name with avatar
-                name_widget = QWidget()
-                nl = QHBoxLayout(name_widget)
-                nl.setContentsMargins(0, 0, 0, 0)
-                nl.setSpacing(8)
-                avatar = QLabel(c["full_name"][0] if c.get("full_name") else "?")
-                avatar.setFixedSize(28, 28)
-                avatar.setStyleSheet(f"""
-                    background: {BG_ELEVATED}; border: 2px solid {BORDER};
-                    border-radius: 14px; font-size: 11px; font-weight: 700;
-                    color: {GOLD};
-                """)
-                avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                nl.addWidget(avatar)
-                nl.addWidget(make_label(c.get("full_name", "—"), 13, TEXT_PRIMARY, QFont.Weight.DemiBold))
-                table.setCellWidget(i, 0, name_widget)
-
-                table.setItem(i, 1, QTableWidgetItem(c.get("phone", "—")))
-                table.setItem(i, 2, QTableWidgetItem(c.get("email", "—")))
-                disc = float(c.get("discount_percent", 0) or 0)
-                table.setItem(i, 3, QTableWidgetItem(f"{disc:.0f}%" if disc > 0 else "—"))
-                orders_count = int(c.get("orders_count", 0) or 0)
-                table.setItem(i, 4, QTableWidgetItem(str(orders_count)))
-                total_amt = float(c.get("total_amount", 0) or 0)
-                table.setItem(i, 5, QTableWidgetItem(
-                    f"{total_amt:,.0f} ₽".replace(",", " ")
-                ))
-                last_order = c.get("last_order_date") or "—"
-                table.setItem(i, 6, QTableWidgetItem(str(last_order)))
-
-                action_widget = QWidget()
-                al = QHBoxLayout(action_widget)
-                al.setContentsMargins(0, 0, 0, 0)
-                edit_btn = QPushButton("✏️")
-                edit_btn.setFixedSize(30, 30)
-                edit_btn.setStyleSheet(f"""
-                    background: {BG_ELEVATED}; border: 1px solid {BORDER};
-                    border-radius: 7px; color: {TEXT_SECONDARY};
-                """)
-                edit_btn.clicked.connect(lambda checked, cust=c: self._on_edit_customer(cust))
-                al.addWidget(edit_btn)
-                hist_btn = QPushButton("📋")
-                hist_btn.setFixedSize(30, 30)
-                hist_btn.setStyleSheet(f"""
-                    background: {BG_ELEVATED}; border: 1px solid {BORDER};
-                    border-radius: 7px; color: {TEXT_SECONDARY};
-                """)
-                hist_btn.clicked.connect(lambda checked, cust=c: self._on_view_customer_history(cust))
-                al.addWidget(hist_btn)
-                table.setCellWidget(i, 7, action_widget)
-
-            layout.addWidget(table)
+            self._build_admin_view(layout)
 
         scroll.setWidget(content)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
+    # ─── Admin view ───────────────────────────────────────────
+
+    def _build_admin_view(self, layout: QVBoxLayout):
+        try:
+            all_customers = get_all_customers()
+            if self._search:
+                all_customers = find_customers(self._search)
+        except Exception:
+            all_customers = []
+
+        visible = all_customers[:self._visible_count]
+        has_more = len(all_customers) > self._visible_count
+
+        # ── Header ──
+        header = QHBoxLayout()
+        hleft = QVBoxLayout()
+        hleft.addWidget(make_manrope_label("Клиенты", 24, QFont.Weight.ExtraBold))
+        plural = _pluralize(len(all_customers), ("клиент", "клиента", "клиентов"))
+        hleft.addWidget(make_label(f"{len(all_customers)} {plural} в базе", 13, TEXT_MUTED))
+        header.addLayout(hleft)
+        header.addStretch()
+        add_btn = PrimaryButton("➕ Добавить клиента")
+        add_btn.clicked.connect(self._on_create_customer)
+        header.addWidget(add_btn)
+        layout.addLayout(header)
+
+        # ── Search ──
+        search = SearchInput("🔍 Поиск по имени, телефону или email")
+        search.setMaximumWidth(400)
+        search.textChanged.connect(lambda t: self._set_search(t))
+        layout.addWidget(search)
+
+        # ── Empty state ──
+        if not all_customers:
+            empty = QFrame()
+            empty.setStyleSheet(f"""
+                QFrame {{ background: {BG_CARD}; border: 1px solid {BORDER};
+                          border-radius: 12px; }}
+            """)
+            empty.setMinimumHeight(200)
+            el = QVBoxLayout(empty)
+            el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            el.addWidget(make_label("👥", 40, TEXT_MUTED))
+            el.addWidget(make_manrope_label(
+                "Нет клиентов" if not self._search else "Ничего не найдено",
+                16, QFont.Weight.DemiBold, TEXT_SECONDARY,
+            ))
+            el.addWidget(make_label(
+                "Добавьте первого клиента" if not self._search
+                else "Попробуйте изменить запрос",
+                13, TEXT_MUTED,
+            ))
+            layout.addWidget(empty)
+            return
+
+        # ── Table ──
+        columns = ["Имя", "Телефон", "Email", "Скидка", "Заказов",
+                    "Сумма", "Посл. визит", ""]
+        table = DataTable(columns)
+        table.setRowCount(len(visible))
+        table.horizontalHeader().setStretchLastSection(False)
+
+        # Column sizing
+        hh = table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)   # Name
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)      # Phone
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)    # Email
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)      # Discount
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)      # Orders
+        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)      # Amount
+        hh.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)      # Last visit
+        hh.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)      # Actions
+
+        for col, w in {1: 130, 3: 85, 4: 75, 5: 140, 6: 130, 7: 120}.items():
+            table.setColumnWidth(col, w)
+
+        for i, c in enumerate(visible):
+            # ── Name with avatar ──
+            name = c.get("full_name", "—")
+            initial = name[0] if name and name != "—" else "?"
+            color = _avatar_color(name)
+
+            name_widget = QWidget()
+            nl = QHBoxLayout(name_widget)
+            nl.setContentsMargins(0, 0, 0, 0)
+            nl.setSpacing(10)
+
+            avatar = QLabel(initial)
+            avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            avatar.setFixedSize(36, 36)
+            avatar.setStyleSheet(f"""
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {color}, stop:1 #00000000);
+                border: 2px solid {color}55;
+                border-radius: 18px;
+                font-size: 13px;
+                font-weight: 700;
+                color: #FFFFFF;
+            """)
+            nl.addWidget(avatar)
+            nl.addWidget(make_label(name, 13, TEXT_PRIMARY, QFont.Weight.DemiBold))
+            nl.addStretch()
+            table.setCellWidget(i, 0, name_widget)
+
+            # ── Phone ──
+            item = QTableWidgetItem(c.get("phone", "—"))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(i, 1, item)
+
+            # ── Email ──
+            item = QTableWidgetItem(c.get("email", "—"))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(i, 2, item)
+
+            # ── Discount badge ──
+            disc_widget = QWidget()
+            dl = QHBoxLayout(disc_widget)
+            dl.setContentsMargins(0, 0, 0, 0)
+            disc = float(c.get("discount_percent", 0) or 0)
+            if disc > 0:
+                badge = QLabel(f"−{disc:.0f}%")
+                badge.setStyleSheet(f"""
+                    background: rgba(201,164,92,0.12);
+                    border: 1px solid rgba(201,164,92,0.25);
+                    border-radius: 6px;
+                    color: {GOLD};
+                    font-size: 12px;
+                    font-weight: 700;
+                    padding: 2px 8px;
+                """)
+                dl.addWidget(badge)
+            else:
+                dash = QLabel("—")
+                dash.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px; background: transparent; border: none; padding: 0;")
+                dl.addWidget(dash)
+            dl.addStretch()
+            table.setCellWidget(i, 3, disc_widget)
+
+            # ── Orders count ──
+            oc = str(int(c.get("orders_count", 0) or 0))
+            item = QTableWidgetItem(oc)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(i, 4, item)
+
+            # ── Total amount (monospace) ──
+            total = float(c.get("total_amount", 0) or 0)
+            amt_widget = QWidget()
+            amt_layout = QHBoxLayout(amt_widget)
+            amt_layout.setContentsMargins(0, 0, 0, 0)
+            amt_layout.setSpacing(2)
+
+            amt_lbl = QLabel(f"{total:,.0f}".replace(",", " "))
+            amt_lbl.setStyleSheet(f"""
+                font-size: 13px; font-weight: 600; color: {TEXT_PRIMARY};
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
+                background: transparent;
+            """)
+            amt_layout.addWidget(amt_lbl)
+
+            currency_lbl = QLabel("₽")
+            currency_lbl.setStyleSheet(f"""
+                font-size: 10px; color: {TEXT_MUTED};
+                font-weight: 400; background: transparent;
+            """)
+            currency_lbl.setAlignment(Qt.AlignmentFlag.AlignBottom)
+            amt_layout.addWidget(currency_lbl)
+            amt_layout.addStretch()
+            table.setCellWidget(i, 5, amt_widget)
+
+            # ── Last visit ──
+            item = QTableWidgetItem(_format_date(c.get("last_order_date")))
+            item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter)
+            table.setItem(i, 6, item)
+
+            # ── Action buttons ──
+            actions = QWidget()
+            al = QHBoxLayout(actions)
+            al.setContentsMargins(0, 0, 0, 0)
+            al.setSpacing(4)
+
+            for btn_data in (
+                ("◉", "Открыть профиль", INFO, self._on_view_customer_history),
+                ("✎", "Редактировать", GOLD, self._on_edit_customer),
+                ("✕", "Удалить", ERROR, self._on_delete_customer),
+            ):
+                icon, tip, hover_color, handler = btn_data
+                btn = QPushButton(icon)
+                btn.setFixedSize(28, 28)
+                btn.setToolTip(tip)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent;
+                        border: 1px solid {BORDER};
+                        border-radius: 6px;
+                        color: {TEXT_SECONDARY};
+                        font-size: 12px;
+                    }}
+                    QPushButton:hover {{
+                        background: rgba({','.join(map(str, hex_to_rgb(hover_color)))}, 0.1);
+                        border-color: {hover_color};
+                        color: {hover_color};
+                    }}
+                """)
+                r, g, b = hex_to_rgb(hover_color)
+                btn.clicked.connect(lambda checked, cust=c, h=handler: h(cust))
+                al.addWidget(btn)
+
+            table.setCellWidget(i, 7, actions)
+
+        layout.addWidget(table)
+
+        # ── Pagination ──
+        if has_more:
+            remaining = len(all_customers) - self._visible_count
+            more_btn = QPushButton(f"Показать ещё  ({remaining})")
+            more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            more_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {BG_CARD};
+                    color: {GOLD};
+                    border: 1px solid {BORDER};
+                    border-radius: 8px;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding: 10px;
+                }}
+                QPushButton:hover {{
+                    background: rgba(201,164,92,0.08);
+                    border-color: rgba(201,164,92,0.3);
+                }}
+            """)
+            more_btn.clicked.connect(self._on_show_more)
+            layout.addWidget(more_btn)
+
+        # ── Stats summary ──
+        total_orders = sum(int(c.get("orders_count", 0) or 0) for c in all_customers)
+        total_revenue = sum(float(c.get("total_amount", 0) or 0) for c in all_customers)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+
+        for val, label_text, lbl_color in (
+            (str(total_orders), _pluralize(total_orders, ("заказ", "заказа", "заказов")), GOLD),
+            (f"{total_revenue:,.0f} ₽".replace(",", " "), "выручка", SUCCESS),
+        ):
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{ background: {BG_CARD}; border: 1px solid {BORDER};
+                          border-radius: 10px; }}
+            """)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(16, 12, 16, 12)
+            cl.setSpacing(2)
+            cl.addWidget(make_label(val, 20, lbl_color, QFont.Weight.ExtraBold))
+            cl.addWidget(make_label(label_text, 11, TEXT_MUTED))
+            stats_row.addWidget(card)
+
+        stats_row.addStretch()
+        layout.addLayout(stats_row)
+
+    # ─── Waiter view ───────────────────────────────────────────
+
+    def _build_waiter_view(self, layout: QVBoxLayout):
+        layout.addWidget(make_manrope_label("Клиенты", 24, QFont.Weight.ExtraBold))
+        layout.addWidget(make_label("Поиск и выбор клиента для заказа", 13, TEXT_MUTED))
+
+        search = QLineEdit()
+        search.setPlaceholderText("\U0001F50D Найти клиента по имени или телефону")
+        search.setStyleSheet(f"""
+            QLineEdit {{
+                background: {BG_CARD}; color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER}; border-radius: 8px;
+                padding: 12px 12px 12px 40px; font-size: 14px;
+                max-width: 480px;
+            }}
+        """)
+        search.textChanged.connect(lambda t: self._set_search(t))
+        layout.addWidget(search)
+
+        create_btn = PrimaryButton("\U0001F464 Создать клиента")
+        create_btn.clicked.connect(self._on_create_customer)
+        hdr_actions = QHBoxLayout()
+        hdr_actions.addWidget(create_btn)
+        hdr_actions.addStretch()
+        layout.addLayout(hdr_actions)
+
+        try:
+            customers = get_all_customers() if not self._search else find_customers(self._search)
+        except Exception:
+            customers = []
+
+        if not customers:
+            empty = QFrame()
+            empty.setStyleSheet(f"""
+                QFrame {{ background: {BG_CARD}; border: 1px solid {BORDER};
+                          border-radius: 12px; }}
+            """)
+            empty.setMinimumHeight(160)
+            el = QVBoxLayout(empty)
+            el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            el.addWidget(make_label("👥", 36, TEXT_MUTED))
+            el.addWidget(make_label(
+                "Нет клиентов" if not self._search else "Ничего не найдено",
+                14, TEXT_SECONDARY,
+            ))
+            layout.addWidget(empty)
+            return
+
+        for c in customers[:self._visible_count]:
+            card = Card()
+            cl = QHBoxLayout(card)
+            cl.setContentsMargins(16, 14, 16, 14)
+            cl.setSpacing(14)
+
+            name = c.get("full_name", "—")
+            initial = name[0] if name and name != "—" else "?"
+            color = _avatar_color(name)
+
+            avatar = QLabel(initial)
+            avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            avatar.setFixedSize(40, 40)
+            avatar.setStyleSheet(f"""
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {color}, stop:1 #00000000);
+                border: 2px solid {color}55;
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: 700;
+                color: #FFFFFF;
+            """)
+            cl.addWidget(avatar)
+
+            vi = QVBoxLayout()
+            vi.setSpacing(2)
+            vi.addWidget(make_label(name, 14, TEXT_PRIMARY, QFont.Weight.DemiBold))
+            vi.addWidget(make_label(c.get("phone", ""), 12, TEXT_SECONDARY))
+            cl.addLayout(vi)
+            cl.addStretch()
+
+            disc = float(c.get("discount_percent", 0) or 0)
+            if disc > 0:
+                badge = QLabel(f"−{disc:.0f}%")
+                badge.setStyleSheet(f"""
+                    background: rgba(201,164,92,0.1);
+                    border: 1px solid rgba(201,164,92,0.2);
+                    border-radius: 20px;
+                    color: {GOLD}; font-size: 12px; font-weight: 600;
+                    padding: 3px 10px;
+                """)
+                cl.addWidget(badge)
+
+            select_btn = SecondaryButton("Выбрать клиента")
+            select_btn.clicked.connect(lambda checked, cust=c: self._on_select_customer(cust))
+            cl.addWidget(select_btn)
+
+            layout.addWidget(card)
+
+        # Waiter pagination
+        if len(customers) > self._visible_count:
+            remaining = len(customers) - self._visible_count
+            more_btn = QPushButton(f"Показать ещё ({remaining})")
+            more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            more_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {BG_CARD}; color: {GOLD};
+                    border: 1px solid {BORDER}; border-radius: 8px;
+                    font-size: 13px; font-weight: 600; padding: 10px;
+                }}
+                QPushButton:hover {{
+                    background: rgba(201,164,92,0.08);
+                    border-color: rgba(201,164,92,0.3);
+                }}
+            """)
+            more_btn.clicked.connect(self._on_show_more)
+            layout.addWidget(more_btn)
+
+    # ─── Search ────────────────────────────────────────────────
+
     def _set_search(self, text: str):
-        self._search = text
+        self._search = text.strip()
+        self._visible_count = self._page_size
         self._setup_ui()
 
+    def _on_show_more(self):
+        self._visible_count += self._page_size
+        self._setup_ui()
+
+    # ─── CRUD handlers ─────────────────────────────────────────
+
     def _on_create_customer(self):
-        """Open dialog to create a new customer."""
         dlg = CustomerEditDialog(customer=None, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             result = dlg.get_result()
@@ -2942,17 +3465,19 @@ class CustomersScreen(QWidget):
                     f"Клиент {result['full_name']} создан")
                 self._setup_ui()
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось создать клиента:\n{e}")
+                QMessageBox.critical(self, "Ошибка",
+                    f"Не удалось создать клиента:\n{e}")
 
     def _on_select_customer(self, customer: dict):
-        """Handle selecting a customer (waiter view)."""
+        global _selected_customer_for_order
+        _selected_customer_for_order = customer
         name = customer.get("full_name", "—")
-        phone = customer.get("phone", "—")
         QMessageBox.information(self, "Клиент выбран",
-            f"Выбран клиент: {name}\nТелефон: {phone}")
+            f"Выбран клиент: {name}")
+        if self._on_navigate:
+            self._on_navigate("new-order")
 
     def _on_edit_customer(self, customer: dict):
-        """Open dialog to edit an existing customer."""
         dlg = CustomerEditDialog(customer=customer, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             result = dlg.get_result()
@@ -2962,10 +3487,27 @@ class CustomersScreen(QWidget):
                     f"Клиент {result['full_name']} обновлён")
                 self._setup_ui()
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить клиента:\n{e}")
+                QMessageBox.critical(self, "Ошибка",
+                    f"Не удалось обновить клиента:\n{e}")
+
+    def _on_delete_customer(self, customer: dict):
+        name = customer.get("full_name", "—")
+        reply = QMessageBox.question(
+            self, "Удаление клиента",
+            f"Вы уверены, что хотите удалить клиента «{name}»?\n"
+            "История заказов клиента будет сохранена.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                delete_customer(customer["id"])
+                self._setup_ui()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка",
+                    f"Не удалось удалить клиента:\n{e}")
 
     def _on_view_customer_history(self, customer: dict):
-        """Show dialog with customer's orders."""
         cust_id = customer.get("id")
         name = customer.get("full_name", "—")
         try:
@@ -2983,11 +3525,10 @@ class CustomersScreen(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        header_lbl = make_manrope_label(
-            f"Заказы клиента: {name}", 16, QFont.Weight.DemiBold
-        )
-        layout.addWidget(header_lbl)
-        layout.addWidget(make_label(f"Всего заказов: {len(orders)}", 13, TEXT_MUTED))
+        layout.addWidget(make_manrope_label(
+            f"Заказы клиента: {name}", 16, QFont.Weight.DemiBold))
+        layout.addWidget(make_label(
+            f"Всего заказов: {len(orders)}", 13, TEXT_MUTED))
 
         if orders:
             table = DataTable(["№ заказа", "Дата", "Статус", "Сумма", "Итого"])
@@ -2998,11 +3539,9 @@ class CustomersScreen(QWidget):
                 cfg = ORDER_STATUS_CONFIG.get(o["status"], {})
                 table.setItem(i, 2, QTableWidgetItem(cfg.get("label", o["status"])))
                 table.setItem(i, 3, QTableWidgetItem(
-                    f"{float(o['total_amount']):,.0f} ₽".replace(",", " ")
-                ))
+                    f"{float(o['total_amount']):,.0f} ₽".replace(",", " ")))
                 table.setItem(i, 4, QTableWidgetItem(
-                    f"{float(o['final_amount']):,.0f} ₽".replace(",", " ")
-                ))
+                    f"{float(o['final_amount']):,.0f} ₽".replace(",", " ")))
             layout.addWidget(table)
         else:
             layout.addWidget(make_label("У клиента нет заказов", 14, TEXT_MUTED))
@@ -3206,6 +3745,7 @@ class PaymentsScreen(QWidget):
     def _setup_ui(self):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content = QWidget()
@@ -3316,6 +3856,7 @@ class ReportsScreen(QWidget):
     def _setup_ui(self):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         content = QWidget()
@@ -3324,30 +3865,59 @@ class ReportsScreen(QWidget):
         layout.setSpacing(24)
 
         # Header
+        month_names = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                       "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+        now_dt = datetime.now()
+        date_str = f"{now_dt.day} {month_names[now_dt.month-1]} {now_dt.year}"
         header = QHBoxLayout()
         header.addWidget(make_manrope_label("Отчеты", 24, QFont.Weight.ExtraBold))
-        header.addWidget(make_label("Аналитика · 18 июня 2026", 13, TEXT_MUTED))
+        header.addWidget(make_label(f"Аналитика · {date_str}", 13, TEXT_MUTED))
         header.addStretch()
         period_btns = QHBoxLayout()
         period_btns.setSpacing(8)
+        self._period_btns = []
         for i, p in enumerate(["Сегодня", "Неделя", "Месяц"]):
             btn = FilterTab(p, self._period == p)
             btn.clicked.connect(lambda checked, pp=p: self._set_period(pp))
             period_btns.addWidget(btn)
+            self._period_btns.append(btn)
         header.addLayout(period_btns)
         layout.addLayout(header)
 
-        # Stats
+        # Stats — загружаем реальные данные
+        try:
+            all_orders = get_all_orders()
+            paid_orders = [o for o in all_orders if o.get("status") == "paid"]
+            all_tables = get_all_tables()
+            rev_data = get_daily_revenue()
+            pop_dishes = get_popular_dishes()
+        except:
+            all_orders = []
+            paid_orders = []
+            all_tables = []
+            rev_data = []
+            pop_dishes = []
+
+        today_total = sum(float(o.get("final_amount", 0) or 0) for o in paid_orders)
+        today_orders = len(paid_orders)
+        avg_check = today_total / today_orders if today_orders > 0 else 0
+        top_dish_name = pop_dishes[0].get("name", "—") if pop_dishes else "—"
+        top_dish_cnt = pop_dishes[0].get("order_count", 0) if pop_dishes else 0
+        week_total = sum(float(r.get("total", 0)) for r in rev_data[:7])
+        week_order_count = sum(int(r.get("order_count", 0)) for r in rev_data[:7])
+
         stats = QHBoxLayout()
         stats.setSpacing(14)
-        for label, value, sub, color in [
-            ("Выручка за день", "127 400 ₽", "+14%", GOLD),
-            ("Выручка за неделю", "427 100 ₽", "+8%", GOLD),
-            ("Количество заказов", "84", "", INFO),
-            ("Средний чек", "1 517 ₽", "+5%", WARNING),
-            ("Топ блюдо", "Стейк", "124 заказа", "#9B6CDD"),
-            ("Оплаченных", "78", "из 84", SUCCESS),
-        ]:
+        stat_items = [
+            ("Выручка за день", f"{today_total:,.0f} ₽".replace(",", " "), "", GOLD),
+            ("Выручка за неделю", f"{week_total:,.0f} ₽".replace(",", " "), "", GOLD),
+            ("Заказов сегодня", str(today_orders), "", INFO),
+            ("Средний чек", f"{avg_check:,.0f} ₽".replace(",", " "), "", WARNING),
+        ]
+        if top_dish_name != "—":
+            stat_items.append(("Топ блюдо", top_dish_name, f"{top_dish_cnt} заказов", "#9B6CDD"))
+        stat_items.append(("Всего столиков", str(len(all_tables)), "", SUCCESS))
+        for label, value, sub, color in stat_items:
             stats.addWidget(StatCard(label, value, sub, color))
         layout.addLayout(stats)
 
@@ -3358,53 +3928,60 @@ class ReportsScreen(QWidget):
         rev_card = Card()
         rl = QVBoxLayout(rev_card)
         rl.setContentsMargins(24, 24, 24, 24)
-        rl.addWidget(SectionHeader("Продажи по дням", "Выручка за текущую неделю"))
+        rl.addWidget(SectionHeader("Продажи по дням", "Выручка за неделю"))
         rl.addSpacing(16)
-        week_data = [
-            ("Пн", "48 200", 32, 54), ("Вт", "52 100", 38, 58),
-            ("Ср", "61 400", 45, 69), ("Чт", "58 900", 41, 66),
-            ("Пт", "74 300", 54, 83), ("Сб", "89 200", 68, 100),
-            ("Вс", "42 800", 30, 48),
-        ]
-        for day, rev, cnt, pct in week_data:
-            row = QHBoxLayout()
-            row.addWidget(make_label(day, 13, TEXT_PRIMARY))
-            row.addStretch()
-            row.addWidget(make_label(f"{rev} ₽", 13, GOLD, QFont.Weight.Bold))
-            rl.addLayout(row)
-            bar_row = QHBoxLayout()
-            bar_row.setSpacing(8)
-            bar = QFrame()
-            bar.setFixedHeight(6)
-            bar.setStyleSheet(f"""
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {GOLD}, stop:1 rgba(201,164,92,0.3));
-                border-radius: 3px;
-                max-width: {pct}%;
-            """)
-            bar_row.addWidget(bar)
-            bar_row.addWidget(make_label(f"{pct}%", 11, TEXT_MUTED))
-            rl.addLayout(bar_row)
+        if rev_data:
+            max_rev = max((float(r.get("total", 0)) for r in rev_data[:7]), default=1)
+            for r in rev_data[:7]:
+                day = str(r.get("payment_date", ""))[:3]
+                rev_val = float(r.get("total", 0))
+                pct = int(rev_val * 100 / max_rev) if max_rev else 0
+                row = QHBoxLayout()
+                row.addWidget(make_label(day, 13, TEXT_PRIMARY))
+                row.addStretch()
+                row.addWidget(make_label(f"{rev_val:,.0f} ₽".replace(",", " "), 13, GOLD, QFont.Weight.Bold))
+                rl.addLayout(row)
+                bar_row = QHBoxLayout()
+                bar_row.setSpacing(8)
+                bar = QFrame()
+                bar.setFixedHeight(6)
+                bar.setStyleSheet(f"""
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 {GOLD}, stop:1 rgba(201,164,92,0.3));
+                    border-radius: 3px;
+                    max-width: {pct}%;
+                """)
+                bar_row.addWidget(bar)
+                bar_row.addWidget(make_label(f"{pct}%", 11, TEXT_MUTED))
+                rl.addLayout(bar_row)
+        else:
+            rl.addWidget(make_label("Нет данных о продажах", 13, TEXT_MUTED))
         charts_row.addWidget(rev_card, 1)
 
+        # Status distribution
+        status_counts = {}
+        for o in all_orders:
+            s = o.get("status", "unknown")
+            status_counts[s] = status_counts.get(s, 0) + 1
+        statuses_for_report = [
+            ("paid", "Оплачен", EMERALD),
+            ("served", "Подан", "#9B6CDD"),
+            ("ready", "Готов", SUCCESS),
+            ("cooking", "Готовится", WARNING),
+            ("cancelled", "Отменен", ERROR),
+        ]
         stats_card = Card()
         sl = QVBoxLayout(stats_card)
         sl.setContentsMargins(24, 24, 24, 24)
-        sl.addWidget(SectionHeader("Заказы по статусу", "Распределение за неделю"))
+        sl.addWidget(SectionHeader("Заказы по статусу", "Распределение"))
         sl.addSpacing(16)
-        status_items = [
-            ("Оплачен", 312, "#3FA66B"),
-            ("Подан", 28, "#9B6CDD"),
-            ("Готов", 14, "#3FA66B"),
-            ("Готовится", 18, "#D98A35"),
-            ("Отменен", 12, "#C94C4C"),
-        ]
-        for status, count, color in status_items:
+        for key, label, color in statuses_for_report:
+            count = status_counts.get(key, 0)
             row = QHBoxLayout()
             dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 12px;")
+            dot.setStyleSheet(f"color: {color}; font-size: 12px; border: none; padding: 0; margin: 0;")
             row.addWidget(dot)
-            row.addWidget(make_label(status, 13, TEXT_SECONDARY))
+            row.addWidget(make_label(label, 13, TEXT_SECONDARY))
             row.addStretch()
             row.addWidget(make_label(str(count), 13, TEXT_PRIMARY, QFont.Weight.Bold))
             sl.addLayout(row)
@@ -3412,73 +3989,88 @@ class ReportsScreen(QWidget):
 
         layout.addLayout(charts_row)
 
-        # Popular dishes & payment methods
+        # Bottom row
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(20)
 
+        # Popular dishes
         pop_card = Card()
         pl = QVBoxLayout(pop_card)
         pl.setContentsMargins(24, 24, 24, 24)
-        pl.addWidget(SectionHeader("Популярные блюда", "Топ по количеству заказов"))
+        pl.addWidget(SectionHeader("Популярные блюда", "По заказам"))
         pl.addSpacing(16)
-        for name, orders_count in [
-            ("Стейк Рибай", 124), ("Паста Карбонара", 98),
-            ("Лосось на гриле", 87), ("Цезарь с курицей", 76),
-            ("Тирамису", 65),
-        ]:
-            pl.addWidget(make_label(name, 13, TEXT_PRIMARY))
-            bar_row = QHBoxLayout()
-            bar_row.setSpacing(8)
-            bar = QFrame()
-            bar.setFixedHeight(6)
-            bar.setStyleSheet(f"""
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {GOLD}, stop:1 rgba(201,164,92,0.2));
-                border-radius: 3px;
-                max-width: {orders_count}%;
-            """)
-            bar_row.addWidget(bar)
-            bar_row.addWidget(make_label(f"{orders_count} заказов", 11, TEXT_MUTED))
-            pl.addLayout(bar_row)
+        if pop_dishes:
+            max_cnt = max((int(d.get("order_count", 0)) for d in pop_dishes), default=1) or 1
+            for d in pop_dishes:
+                name = d.get("name", "—")
+                cnt = int(d.get("order_count", 0))
+                pct = cnt * 100 // max_cnt
+                pl.addWidget(make_label(name, 13, TEXT_PRIMARY))
+                bar_row = QHBoxLayout()
+                bar_row.setSpacing(8)
+                bar = QFrame()
+                bar.setFixedHeight(6)
+                bar.setStyleSheet(f"""
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 {GOLD}, stop:1 rgba(201,164,92,0.2));
+                    border-radius: 3px;
+                    max-width: {pct}%;
+                """)
+                bar_row.addWidget(bar)
+                bar_row.addWidget(make_label(f"{cnt} заказов", 11, TEXT_MUTED))
+                pl.addLayout(bar_row)
+        else:
+            pl.addWidget(make_label("Нет данных", 13, TEXT_MUTED))
         bottom_row.addWidget(pop_card, 2)
 
+        # Payment method distribution
         pay_card = Card()
         pyl = QVBoxLayout(pay_card)
         pyl.setContentsMargins(24, 24, 24, 24)
-        pyl.addWidget(SectionHeader("Выручка по оплате", "По способам оплаты"))
+        pyl.addWidget(SectionHeader("Способы оплаты", "Распределение"))
         pyl.addSpacing(16)
-        for method, amount, pct, color in [
-            ("Карта", "168 400 ₽", 62, GOLD),
-            ("Наличные", "64 200 ₽", 24, SUCCESS),
-            ("Онлайн", "38 000 ₽", 14, INFO),
-        ]:
-            pyl.addWidget(make_label(method, 13, TEXT_PRIMARY))
-            bar = QFrame()
-            bar.setFixedHeight(6)
-            bar.setStyleSheet(f"""
-                background: {color};
-                border-radius: 3px;
-                max-width: {pct}%;
-            """)
-            pyl.addWidget(bar)
-            pyl.addWidget(make_label(f"{amount} · {pct}% от выручки", 11, TEXT_MUTED))
+        try:
+            payments = get_all_payments()
+            method_counts = {}
+            for p in payments:
+                m = p.get("payment_method", "unknown")
+                method_counts[m] = method_counts.get(m, 0) + float(p.get("amount", 0))
+            total_pay = sum(method_counts.values()) or 1
+            for method, amount in sorted(method_counts.items(), key=lambda x: -x[1]):
+                pct = int(amount * 100 / total_pay) if total_pay else 0
+                pyl.addWidget(make_label(method, 13, TEXT_PRIMARY))
+                bar = QFrame()
+                bar.setFixedHeight(6)
+                bar.setStyleSheet(f"""
+                    background: {GOLD};
+                    border-radius: 3px;
+                    max-width: {pct}%;
+                """)
+                pyl.addWidget(bar)
+                pyl.addWidget(make_label(
+                    f"{amount:,.0f} ₽ · {pct}%".replace(",", " "), 11, TEXT_MUTED))
+        except:
+            pyl.addWidget(make_label("Нет данных об оплатах", 13, TEXT_MUTED))
         bottom_row.addWidget(pay_card, 1)
-
         layout.addLayout(bottom_row)
 
-        # Revenue by day table
+        # Revenue table
         rev_table_card = Card()
         rtl = QVBoxLayout(rev_table_card)
         rtl.setContentsMargins(0, 0, 0, 0)
         rtl.addWidget(SectionHeader("Выручка по дням"))
         table = DataTable(["День", "Заказов", "Выручка", "Средний чек"])
-        table.setRowCount(len(week_data))
-        for i, (day, rev, orders_cnt, _) in enumerate(week_data):
-            table.setItem(i, 0, QTableWidgetItem(day))
-            table.setItem(i, 1, QTableWidgetItem(str(orders_cnt)))
-            table.setItem(i, 2, QTableWidgetItem(f"{rev} ₽"))
-            avg = int(float(rev.replace(" ", "")) / orders_cnt) if orders_cnt else 0
-            table.setItem(i, 3, QTableWidgetItem(f"{avg:,} ₽".replace(",", " ")))
+        if rev_data:
+            table.setRowCount(min(len(rev_data), 7))
+            for i, r in enumerate(rev_data[:7]):
+                day = str(r.get("payment_date", ""))[:10]
+                cnt = int(r.get("order_count", 0))
+                rev_val = float(r.get("total", 0))
+                avg = int(rev_val / cnt) if cnt else 0
+                table.setItem(i, 0, QTableWidgetItem(day))
+                table.setItem(i, 1, QTableWidgetItem(str(cnt)))
+                table.setItem(i, 2, QTableWidgetItem(f"{rev_val:,.0f} ₽".replace(",", " ")))
+                table.setItem(i, 3, QTableWidgetItem(f"{avg:,} ₽".replace(",", " ")))
         rtl.addWidget(table)
         layout.addWidget(rev_table_card)
 
@@ -3490,7 +4082,8 @@ class ReportsScreen(QWidget):
     def _set_period(self, period: str):
         """Switch report period and refresh."""
         self._period = period
-        self._setup_ui()
+        for btn in getattr(self, "_period_btns", []):
+            btn.set_active(btn.text().strip() == period)
 
 
 # ─── Настройки ──────────────────────────────────────────────────
@@ -3500,8 +4093,49 @@ class SettingsScreen(QWidget):
         super().__init__()
         self._current_section = 0
         self._nav_btns: list[QPushButton] = []
+        self._settings_file = os.path.join(os.path.dirname(__file__), "..", "restaurant_settings.json")
+        self._zones_file = os.path.join(os.path.dirname(__file__), "..", "restaurant_zones.json")
         self.setStyleSheet(f"background: {BG_PRIMARY};")
+        self._settings = self._load_settings()
+        self._zones = self._load_zones()
         self._setup_ui()
+
+    def _load_settings(self) -> dict:
+        defaults = {
+            "name": "GastroHub",
+            "phone": "+7 (495) 123-45-67",
+            "address": "Москва, ул. Тверская, 24",
+            "email": "info@gastrohub.ru",
+            "payment_methods": {"Наличные": True, "Банковская карта": True, "Онлайн-оплата": True},
+        }
+        try:
+            with open(self._settings_file, encoding="utf-8") as f:
+                data = json.load(f)
+                defaults.update(data)
+        except:
+            pass
+        return defaults
+
+    def _save_settings_to_file(self):
+        try:
+            with open(self._settings_file, "w", encoding="utf-8") as f:
+                json.dump(self._settings, f, indent=2, ensure_ascii=False)
+        except:
+            QMessageBox.warning(self, "Ошибка", "Не удалось сохранить настройки")
+
+    def _load_zones(self) -> list:
+        try:
+            with open(self._zones_file, encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return ["Основной зал", "VIP-зона", "Терраса"]
+
+    def _save_zones(self):
+        try:
+            with open(self._zones_file, "w", encoding="utf-8") as f:
+                json.dump(self._zones, f, indent=2, ensure_ascii=False)
+        except:
+            QMessageBox.warning(self, "Ошибка", "Не удалось сохранить зоны")
 
     def _setup_ui(self):
         main_layout = QHBoxLayout(self)
@@ -3535,10 +4169,10 @@ class SettingsScreen(QWidget):
                     text-align: left; padding: 10px 12px;
                     border-radius: 8px; border: none;
                     background: {'rgba(201,164,92,0.1)' if active else 'transparent'};
-                    color: {'{GOLD}' if active else '{TEXT_SECONDARY}'};
+                    color: {GOLD if active else TEXT_SECONDARY};
                     font-size: 13px;
                     font-weight: {'600' if active else '400'};
-                    border-left: 3px solid {'{GOLD}' if active else 'transparent'};
+                    border-left: 3px solid {GOLD if active else 'transparent'};
                 }}
                 QPushButton:hover {{
                     background: rgba(255,255,255,0.03);
@@ -3574,7 +4208,7 @@ class SettingsScreen(QWidget):
         # Name field
         nv = QVBoxLayout()
         nv.addWidget(make_label("Название", 11, TEXT_MUTED))
-        self._restaurant_name_edit = QLineEdit("GastroHub")
+        self._restaurant_name_edit = QLineEdit(self._settings.get("name", "GastroHub"))
         self._restaurant_name_edit.setStyleSheet(f"""
             background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
             border: 1px solid {BORDER}; border-radius: 8px;
@@ -3586,7 +4220,7 @@ class SettingsScreen(QWidget):
         # Phone field
         pv = QVBoxLayout()
         pv.addWidget(make_label("Телефон", 11, TEXT_MUTED))
-        self._restaurant_phone_edit = QLineEdit("+7 (495) 123-45-67")
+        self._restaurant_phone_edit = QLineEdit(self._settings.get("phone", "+7 (495) 123-45-67"))
         self._restaurant_phone_edit.setStyleSheet(f"""
             background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
             border: 1px solid {BORDER}; border-radius: 8px;
@@ -3601,7 +4235,7 @@ class SettingsScreen(QWidget):
         # Address field
         av = QVBoxLayout()
         av.addWidget(make_label("Адрес", 11, TEXT_MUTED))
-        self._restaurant_address_edit = QLineEdit("Москва, ул. Тверская, 24")
+        self._restaurant_address_edit = QLineEdit(self._settings.get("address", "Москва, ул. Тверская, 24"))
         self._restaurant_address_edit.setStyleSheet(f"""
             background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
             border: 1px solid {BORDER}; border-radius: 8px;
@@ -3613,7 +4247,7 @@ class SettingsScreen(QWidget):
         # Email field
         ev = QVBoxLayout()
         ev.addWidget(make_label("Email", 11, TEXT_MUTED))
-        self._restaurant_email_edit = QLineEdit("info@gastrohub.ru")
+        self._restaurant_email_edit = QLineEdit(self._settings.get("email", "info@gastrohub.ru"))
         self._restaurant_email_edit.setStyleSheet(f"""
             background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
             border: 1px solid {BORDER}; border-radius: 8px;
@@ -3706,7 +4340,7 @@ class SettingsScreen(QWidget):
             bl.setContentsMargins(16, 10, 16, 10)
             bl.setSpacing(8)
             dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+            dot.setStyleSheet(f"color: {color}; font-size: 10px; border: none; padding: 0; margin: 0;")
             bl.addWidget(dot)
             bl.addWidget(make_label(label, 13, TEXT_PRIMARY, QFont.Weight.Medium))
             status_row.addWidget(badge)
@@ -3721,10 +4355,13 @@ class SettingsScreen(QWidget):
         zone_header = QHBoxLayout()
         zone_header.addWidget(make_manrope_label("Зоны столиков", 15, QFont.Weight.DemiBold))
         zone_header.addStretch()
-        zone_header.addWidget(PrimaryButton("Добавить зону"))
+        add_zone_btn = PrimaryButton("Добавить зону")
+        add_zone_btn.clicked.connect(self._on_add_zone)
+        zone_header.addWidget(add_zone_btn)
         zl.addLayout(zone_header)
         zl.addSpacing(12)
-        for zone in ["Основной зал", "VIP-зона", "Терраса"]:
+        self._zone_rows: list[QFrame] = []
+        for zone in self._zones:
             row = QFrame()
             row.setStyleSheet(f"""
                 background: {BG_SECONDARY};
@@ -3734,8 +4371,15 @@ class SettingsScreen(QWidget):
             rl2.setContentsMargins(16, 12, 16, 12)
             rl2.addWidget(make_label(f"📍 {zone}", 14, TEXT_PRIMARY))
             rl2.addStretch()
-            rl2.addWidget(SecondaryButton("Редактировать"))
+            edit_btn = SecondaryButton("Редактировать")
+            edit_btn.clicked.connect(lambda checked, z=zone: self._on_edit_zone(z))
+            rl2.addWidget(edit_btn)
+            del_btn = DangerButton("✕")
+            del_btn.setFixedSize(32, 32)
+            del_btn.clicked.connect(lambda checked, z=zone: self._on_delete_zone(z))
+            rl2.addWidget(del_btn)
             zl.addWidget(row)
+            self._zone_rows.append(row)
         rl.addWidget(zones_card)
 
         # Payment methods
@@ -3744,7 +4388,9 @@ class SettingsScreen(QWidget):
         pml2.setContentsMargins(24, 24, 24, 24)
         pml2.addWidget(make_manrope_label("Способы оплаты", 15, QFont.Weight.DemiBold))
         pml2.addSpacing(12)
-        for method in ["Наличные", "Банковская карта", "Онлайн-оплата"]:
+        self._payment_toggles: dict[str, QFrame] = {}
+        payment_methods = self._settings.get("payment_methods", {})
+        for method, enabled in payment_methods.items():
             row = QFrame()
             row.setStyleSheet(f"""
                 background: {BG_SECONDARY};
@@ -3756,34 +4402,341 @@ class SettingsScreen(QWidget):
             rl3.addStretch()
             toggle = QFrame()
             toggle.setFixedSize(44, 24)
+            toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+            toggle.mousePressEvent = lambda ev, m=method: self._toggle_payment(m)
+            toggle_dot = QFrame(toggle)
+            toggle_dot.setFixedSize(16, 16)
+            toggle_dot.move(22 if enabled else 4, 3)
+            bg = SUCCESS if enabled else DISABLED
+            border = SUCCESS if enabled else BORDER
             toggle.setStyleSheet(f"""
-                background: rgba(63,166,107,0.2);
-                border: 1px solid {SUCCESS};
+                background: rgba({','.join(map(str, hex_to_rgb(bg)))}, 0.2);
+                border: 1px solid {border};
                 border-radius: 12px;
             """)
-            toggle_dot = QFrame()
-            toggle_dot.setFixedSize(16, 16)
-            toggle_dot.move(22, 3)
             toggle_dot.setStyleSheet(f"""
-                background: {SUCCESS};
+                background: {bg};
                 border-radius: 8px;
             """)
             rl3.addWidget(toggle)
+            self._payment_toggles[method] = toggle
             pml2.addWidget(row)
         rl.addWidget(paym_card)
 
         main_layout.addWidget(right, 1)
 
     def _set_section(self, section_idx: int):
-        """Switch settings section."""
+        """Switch settings section — update nav styles and scroll to content."""
         self._current_section = section_idx
-        self._setup_ui()
+        for i, btn in enumerate(self._nav_btns):
+            active = i == section_idx
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    text-align: left; padding: 10px 12px;
+                    border-radius: 8px; border: none;
+                    background: {'rgba(201,164,92,0.1)' if active else 'transparent'};
+                    color: {GOLD if active else TEXT_SECONDARY};
+                    font-size: 13px;
+                    font-weight: {'600' if active else '400'};
+                    border-left: 3px solid {GOLD if active else 'transparent'};
+                }}
+                QPushButton:hover {{
+                    background: rgba(255,255,255,0.03);
+                }}
+            """)
 
     def _on_save_settings(self):
-        """Save settings (placeholder — reads fields and shows demo mode message)."""
-        name = self._restaurant_name_edit.text()
-        phone = self._restaurant_phone_edit.text()
-        address = self._restaurant_address_edit.text()
-        email = self._restaurant_email_edit.text()
-        QMessageBox.information(self, "Настройки",
-            "Изменения сохранены (демо-режим)")
+        """Save settings to JSON file."""
+        self._settings["name"] = self._restaurant_name_edit.text()
+        self._settings["phone"] = self._restaurant_phone_edit.text()
+        self._settings["address"] = self._restaurant_address_edit.text()
+        self._settings["email"] = self._restaurant_email_edit.text()
+        self._save_settings_to_file()
+        QMessageBox.information(self, "Настройки", "Изменения сохранены")
+
+    def _on_add_zone(self):
+        """Add a new zone via input dialog."""
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Добавить зону", "Название зоны:")
+        if ok and name.strip():
+            self._zones.append(name.strip())
+            self._save_zones()
+            QMessageBox.information(self, "Зоны", f"Зона «{name.strip()}» добавлена")
+
+    def _on_edit_zone(self, zone: str):
+        """Edit zone name."""
+        from PyQt6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "Изменить зону", "Название зоны:", text=zone)
+        if ok and name.strip():
+            idx = self._zones.index(zone)
+            self._zones[idx] = name.strip()
+            self._save_zones()
+            QMessageBox.information(self, "Зоны", f"Зона переименована в «{name.strip()}»")
+
+    def _on_delete_zone(self, zone: str):
+        """Delete a zone with confirmation."""
+        reply = QMessageBox.question(
+            self, "Удалить зону",
+            f"Вы уверены, что хотите удалить зону «{zone}»?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._zones.remove(zone)
+            self._save_zones()
+
+    def _toggle_payment(self, method: str):
+        """Toggle payment method enabled state."""
+        methods = self._settings.get("payment_methods", {})
+        if method in methods:
+            methods[method] = not methods[method]
+            self._save_settings_to_file()
+
+
+# ─── Order Edit Dialog ──────────────────────────────────────────
+
+class OrderEditDialog(QDialog):
+    """Dialog for editing an existing order (table, customer, comment)."""
+    def __init__(self, order: dict, parent=None):
+        super().__init__(parent)
+        self._order = order
+        self.setWindowTitle(f"Редактирование заказа #{order['id']}")
+        self.setModal(True)
+        self.setMinimumSize(420, 300)
+        self.setStyleSheet(f"background: {BG_PRIMARY}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        layout.addWidget(make_manrope_label(f"Заказ #{order['id']}", 18, QFont.Weight.ExtraBold))
+
+        # Table
+        from database.queries import get_all_tables
+        tables = get_all_tables()
+        self._table_combo = QComboBox()
+        for t in tables:
+            label = f"Столик №{t['table_number']} ({t.get('zone', '')})"
+            self._table_combo.addItem(label, t["id"])
+            if t["id"] == order.get("table_id"):
+                self._table_combo.setCurrentIndex(self._table_combo.count() - 1)
+        layout.addWidget(make_label("Столик:", 12, TEXT_MUTED))
+        layout.addWidget(self._table_combo)
+
+        # Customer
+        from database.queries import get_all_customers
+        customers = get_all_customers()
+        self._customer_combo = QComboBox()
+        self._customer_combo.addItem("Без клиента", None)
+        for c in customers:
+            self._customer_combo.addItem(c["full_name"], c["id"])
+            if c["id"] == order.get("customer_id"):
+                self._customer_combo.setCurrentIndex(self._customer_combo.count() - 1)
+        layout.addWidget(make_label("Клиент:", 12, TEXT_MUTED))
+        layout.addWidget(self._customer_combo)
+
+        # Comment
+        layout.addWidget(make_label("Комментарий:", 12, TEXT_MUTED))
+        self._comment_edit = QTextEdit()
+        self._comment_edit.setPlainText(order.get("comment", ""))
+        self._comment_edit.setMaximumHeight(80)
+        self._comment_edit.setStyleSheet(f"""
+            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
+            border: 1px solid {BORDER}; border-radius: 8px;
+            padding: 8px; font-size: 13px;
+        """)
+        layout.addWidget(self._comment_edit)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        cancel_btn = SecondaryButton("Отмена")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addStretch()
+        save_btn = PrimaryButton("Сохранить")
+        save_btn.clicked.connect(self._on_save)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
+
+    def _on_save(self):
+        table_id = self._table_combo.currentData()
+        customer_id = self._customer_combo.currentData()
+        comment = self._comment_edit.toPlainText().strip()
+        from database.queries import update_order
+        update_order(
+            self._order["id"],
+            table_id=table_id,
+            customer_id=customer_id,
+            comment=comment,
+        )
+        QMessageBox.information(self, "Готово", "Заказ обновлен")
+        self.accept()
+
+
+# ─── PaymentView Dialog ─────────────────────────────────────────
+
+class PaymentViewDialog(QDialog):
+    """Dialog to view payment details for an order."""
+    def __init__(self, order: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Оплата заказа #{order['id']}")
+        self.setModal(True)
+        self.setMinimumSize(480, 350)
+        self.setStyleSheet(f"background: {BG_PRIMARY}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        layout.addWidget(make_manrope_label(f"Оплата заказа #{order['id']}", 18, QFont.Weight.ExtraBold))
+
+        order_cfg = ORDER_STATUS_CONFIG.get(order["status"], {})
+        layout.addWidget(StatusBadge(order_cfg))
+
+        # Order info
+        info_card = Card()
+        il = QVBoxLayout(info_card)
+        il.setSpacing(8)
+        il.addWidget(make_label(f"Столик №{order.get('table_number', '?')}", 13, TEXT_SECONDARY))
+        il.addWidget(make_label(f"Клиент: {order.get('customer_name', '—')}", 13, TEXT_SECONDARY))
+        total = float(order.get("final_amount", order.get("total_amount", 0)))
+        il.addWidget(make_manrope_label(f"Сумма: {total:,.0f} ₽".replace(",", " "), 20, QFont.Weight.ExtraBold, GOLD))
+        layout.addWidget(info_card)
+
+        from database.queries import get_payments_by_order
+        payments = get_payments_by_order(order["id"])
+
+        if payments:
+            layout.addWidget(make_manrope_label("Проведенные платежи", 15, QFont.Weight.DemiBold))
+            for p in payments:
+                p_card = QFrame()
+                p_card.setStyleSheet(f"""
+                    background: {BG_CARD}; border: 1px solid {BORDER};
+                    border-radius: 8px;
+                """)
+                pl = QHBoxLayout(p_card)
+                pl.setContentsMargins(16, 12, 16, 12)
+                pl.addWidget(make_label(p.get("payment_method", "—"), 13, TEXT_PRIMARY))
+                pl.addWidget(make_label(
+                    f"{float(p['amount']):,.0f} ₽".replace(",", " "), 13, GOLD, QFont.Weight.Bold
+                ))
+                pl.addStretch()
+                pl.addWidget(make_label(str(p.get("paid_at", "")), 11, TEXT_MUTED))
+                layout.addWidget(p_card)
+        else:
+            empty = QFrame()
+            empty.setStyleSheet(f"background: {BG_CARD}; border: 1px dashed {BORDER}; border-radius: 8px;")
+            el = QVBoxLayout(empty)
+            el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            el.addWidget(make_label("Платежей не найдено", 13, TEXT_MUTED))
+            layout.addWidget(empty)
+
+        layout.addStretch()
+        close_btn = PrimaryButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
+# ─── OrderHistory Dialog ────────────────────────────────────────
+
+class OrderHistoryDialog(QDialog):
+    """Dialog showing full order history."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("История заказов")
+        self.setModal(True)
+        self.setMinimumSize(700, 500)
+        self.setStyleSheet(f"background: {BG_PRIMARY}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        layout.addWidget(make_manrope_label("История заказов", 20, QFont.Weight.ExtraBold))
+        layout.addWidget(make_label("Все заказы за все время", 13, TEXT_MUTED))
+
+        from database.queries import get_all_orders
+        orders = get_all_orders()
+
+        table = DataTable(["№", "Столик", "Клиент", "Статус", "Сумма", "Дата"])
+        if orders:
+            table.setRowCount(len(orders))
+            for i, o in enumerate(orders):
+                table.setItem(i, 0, QTableWidgetItem(f"#{o['id']}"))
+                table.setItem(i, 1, QTableWidgetItem(f"Столик №{o.get('table_number', '?')}"))
+                table.setItem(i, 2, QTableWidgetItem(o.get("customer_name", "—") or "—"))
+                cfg = ORDER_STATUS_CONFIG.get(o["status"], {})
+                table.setItem(i, 3, QTableWidgetItem(cfg.get("label", o["status"])))
+                table.setItem(i, 4, QTableWidgetItem(
+                    f"{float(o.get('final_amount', 0)):,.0f} ₽".replace(",", " ")
+                ))
+                table.setItem(i, 5, QTableWidgetItem(str(o.get("created_at", ""))))
+        else:
+            table.setRowCount(1)
+            table.setItem(0, 0, QTableWidgetItem("Нет заказов"))
+        layout.addWidget(table)
+
+        close_btn = PrimaryButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+
+# ─── Notifications Dialog ───────────────────────────────────────
+
+class NotificationsDialog(QDialog):
+    """Dialog showing notifications and alerts."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Уведомления")
+        self.setModal(True)
+        self.setMinimumSize(500, 400)
+        self.setStyleSheet(f"background: {BG_PRIMARY}; color: {TEXT_PRIMARY};")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        layout.addWidget(make_manrope_label("Уведомления", 20, QFont.Weight.ExtraBold))
+        layout.addWidget(make_label("Системные оповещения и события", 13, TEXT_MUTED))
+
+        # Active orders notification
+        try:
+            active = get_active_orders()
+            ready_count = sum(1 for o in active if o["status"] == "ready")
+            new_count = sum(1 for o in active if o["status"] == "new")
+        except:
+            ready_count = 0
+            new_count = 0
+
+        notifications = []
+
+        if ready_count > 0:
+            notifications.append(("✅", "Готовые заказы", f"{ready_count} заказов готовы к подаче", SUCCESS))
+        if new_count > 0:
+            notifications.append(("🆕", "Новые заказы", f"{new_count} новых заказов ожидают", INFO))
+
+        notifications.append(("ℹ️", "Система", "Все системы работают в штатном режиме", TEXT_SECONDARY))
+
+        for icon, title, desc, color in notifications:
+            card = QFrame()
+            card.setStyleSheet(f"""
+                background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.04);
+                border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.15);
+                border-radius: 10px;
+            """)
+            cl = QHBoxLayout(card)
+            cl.setContentsMargins(16, 14, 16, 14)
+            cl.setSpacing(12)
+            icon_lbl = QLabel(icon)
+            icon_lbl.setStyleSheet("font-size: 20px; background: transparent;")
+            cl.addWidget(icon_lbl)
+            tl = QVBoxLayout()
+            tl.addWidget(make_label(title, 14, TEXT_PRIMARY, QFont.Weight.Medium))
+            tl.addWidget(make_label(desc, 12, TEXT_MUTED))
+            cl.addLayout(tl)
+            cl.addStretch()
+            layout.addWidget(card)
+
+        layout.addStretch()
+        close_btn = PrimaryButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)

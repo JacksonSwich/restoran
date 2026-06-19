@@ -7,26 +7,26 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from ui.styles import *
-from ui.widgets import make_manrope_label, make_label
+from ui.widgets import make_manrope_label, make_label, hex_to_rgb
 
 ADMIN_ITEMS = [
-    ("dashboard", "Главная", "📊"),
-    ("tables", "Столики", "🪑"),
-    ("orders", "Заказы", "📋"),
-    ("menu", "Меню", "📖"),
-    ("customers", "Клиенты", "👥"),
-    ("payments", "Оплаты", "💳"),
-    ("reports", "Отчеты", "📈"),
-    ("settings", "Настройки", "⚙️"),
+    ("dashboard", "Главная", "◈"),
+    ("tables", "Столики", "⊞"),
+    ("orders", "Заказы", "☰"),
+    ("menu", "Меню", "⊡"),
+    ("customers", "Клиенты", "◎"),
+    ("payments", "Оплаты", "◇"),
+    ("reports", "Отчеты", "⊟"),
+    ("settings", "Настройки", "⚙"),
 ]
 
 WAITER_ITEMS = [
-    ("waiter-workspace", "Рабочее место", "🏠"),
-    ("tables", "Столики", "🪑"),
-    ("new-order", "Новый заказ", "➕"),
-    ("orders", "Заказы", "📋"),
-    ("menu", "Меню", "📖"),
-    ("payments", "Оплата", "💳"),
+    ("waiter-workspace", "Рабочее место", "◈"),
+    ("tables", "Столики", "⊞"),
+    ("new-order", "Новый заказ", "⊕"),
+    ("orders", "Заказы", "☰"),
+    ("menu", "Меню", "⊡"),
+    ("payments", "Оплата", "◇"),
 ]
 
 
@@ -39,9 +39,12 @@ class Sidebar(QWidget):
         self._current = "dashboard"
         self._buttons: dict[str, QPushButton] = {}
         self.setFixedWidth(220)
+        self.setObjectName("sidebar")
         self.setStyleSheet(f"""
-            background: {BG_SECONDARY};
-            border-right: 1px solid {BORDER};
+            #sidebar {{
+                background: {BG_SECONDARY};
+                border-right: 1px solid {BORDER};
+            }}
         """)
         self._setup_ui()
 
@@ -58,71 +61,77 @@ class Sidebar(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
 
-        # Лого
+        # ─── Логотип GastroHub ────────────────────────────────
         logo = QWidget()
-        logo.setFixedHeight(72)
-        logo.setStyleSheet(f"border-bottom: 1px solid {BORDER};")
+        logo.setFixedHeight(64)
+        logo.setObjectName("logo")
+        logo.setStyleSheet(f"""
+            #logo {{
+                border-bottom: 1px solid {BORDER};
+            }}
+        """)
         ll = QHBoxLayout(logo)
-        ll.setContentsMargins(20, 20, 20, 20)
+        ll.setContentsMargins(18, 16, 18, 16)
         ll.setSpacing(10)
 
-        icon = QLabel("🍽")
+        icon = QLabel("◈")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setFixedSize(32, 32)
         icon.setStyleSheet(f"""
-            font-size: 18px;
+            font-size: 16px;
+            color: {BG_PRIMARY};
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 {GOLD}, stop:1 {GOLD_DARK});
             border-radius: 8px;
-            padding: 8px;
-            min-width: 20px;
-            min-height: 20px;
-            max-width: 20px;
-            max-height: 20px;
+            border: none;
         """)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ll.addWidget(icon)
 
         brand = QVBoxLayout()
         brand.setSpacing(0)
-        t = make_manrope_label("GastroHub", 16, QFont.Weight.ExtraBold)
+        t = make_manrope_label("GastroHub", 15, QFont.Weight.ExtraBold)
         t.setStyleSheet(t.styleSheet() + "; letter-spacing: -0.02em;")
         brand.addWidget(t)
-        st = make_label("POS система", 10, TEXT_MUTED)
-        st.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.04em;")
+        st = make_label("POS система", 9, TEXT_MUTED)
+        st.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.06em; background: transparent; border: none; padding: 0; margin: 0;")
         brand.addWidget(st)
         ll.addLayout(brand)
         ll.addStretch()
         self._layout.addWidget(logo)
 
-        # Индикатор роли
-        self._role_indicator = QWidget()
-        self._role_indicator.setFixedHeight(48)
-        self._layout.addWidget(self._role_indicator)
-        self._update_role_indicator()
-
-        # Навигация
+        # ─── Навигация ────────────────────────────────────────
         self._nav_container = QWidget()
         self._nav_layout = QVBoxLayout(self._nav_container)
-        self._nav_layout.setContentsMargins(10, 8, 10, 8)
+        self._nav_layout.setContentsMargins(8, 12, 8, 12)
         self._nav_layout.setSpacing(2)
         self._build_nav()
         self._layout.addWidget(self._nav_container, 1)
 
-        # Нижняя часть
-        bottom = QWidget()
-        bottom.setFixedHeight(64)
-        bottom.setStyleSheet(f"border-top: 1px solid {BORDER};")
+        # ─── Профиль (нижняя часть) ───────────────────────────
+        bottom = QFrame()
+        bottom.setFixedHeight(72)
+        bottom.setStyleSheet(f"""
+            QFrame {{
+                border-top: 1px solid {BORDER};
+                background: transparent;
+            }}
+            QFrame:hover {{
+                background: rgba(255, 255, 255, 0.02);
+            }}
+        """)
+        bottom.setCursor(Qt.CursorShape.PointingHandCursor)
         bl = QHBoxLayout(bottom)
-        bl.setContentsMargins(16, 12, 16, 12)
+        bl.setContentsMargins(16, 14, 16, 14)
         bl.setSpacing(10)
 
         avatar = QLabel("АД" if self._role == "admin" else "ОФ")
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setFixedSize(32, 32)
+        avatar.setFixedSize(34, 34)
         avatar.setStyleSheet(f"""
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 {BG_ELEVATED}, stop:1 {BORDER});
-            border: 2px solid {BORDER};
-            border-radius: 16px;
+            border: 1.5px solid rgba(201, 164, 92, 0.2);
+            border-radius: 17px;
             font-size: 12px;
             font-weight: 700;
             color: {GOLD};
@@ -130,54 +139,62 @@ class Sidebar(QWidget):
         bl.addWidget(avatar)
 
         user_info = QVBoxLayout()
-        user_info.setSpacing(0)
+        user_info.setSpacing(1)
         uname = make_label("Алексей Д." if self._role == "admin" else "Максим В.",
                            13, TEXT_PRIMARY, QFont.Weight.DemiBold)
         user_info.addWidget(uname)
         urole = make_label("Администратор" if self._role == "admin" else "Официант",
-                           11, TEXT_MUTED)
+                           10, TEXT_MUTED)
+        urole.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 0.02em; background: transparent; border: none; padding: 0; margin: 0;")
         user_info.addWidget(urole)
         bl.addLayout(user_info)
         bl.addStretch()
 
         self._layout.addWidget(bottom)
 
-    def _update_role_indicator(self):
-        role = self._role
-        color = GOLD if role == "admin" else SUCCESS
-        self._role_indicator.setStyleSheet(f"""
-            background: rgba({','.join(str(int(color[i:i+2], 16)) for i in (1, 3, 5))}, 0.08);
-            border: 1px solid rgba({','.join(str(int(color[i:i+2], 16)) for i in (1, 3, 5))}, 0.2);
-            border-radius: 8px;
-            margin: 12px 16px;
-        """)
-        rl = QVBoxLayout(self._role_indicator)
-        rl.setContentsMargins(12, 8, 12, 8)
-        rl.setSpacing(1)
-        rl.addWidget(make_label("РОЛЬ", 10, TEXT_MUTED))
-        role_lbl = make_label(
-            "Администратор" if role == "admin" else "Официант",
-            13, color, QFont.Weight.DemiBold
-        )
-        rl.addWidget(role_lbl)
-
     def _build_nav(self):
         items = ADMIN_ITEMS if self._role == "admin" else WAITER_ITEMS
-        for screen_id, label, icon in items:
-            btn = QPushButton(f"  {icon}  {label}")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setMinimumHeight(38)
-            btn.clicked.connect(lambda checked, s=screen_id: self.navigate_signal.emit(s))
+        for screen_id, label, icon_char in items:
+            btn = self._make_nav_btn(screen_id, label, icon_char)
             self._buttons[screen_id] = btn
             self._nav_layout.addWidget(btn)
         self._nav_layout.addStretch()
         self._update_active()
 
+    def _make_nav_btn(self, screen_id: str, label: str, icon_char: str) -> QPushButton:
+        btn = QPushButton()
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setMinimumHeight(40)
+
+        # Container with icon + text
+        container = QWidget()
+        container_layout = QHBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(10)
+
+        icon_lbl = QLabel(icon_char)
+        icon_lbl.setFixedWidth(18)
+        icon_lbl.setStyleSheet("font-size: 14px; background: transparent; border: none; padding: 0;")
+        container_layout.addWidget(icon_lbl)
+
+        text_lbl = QLabel(label)
+        text_lbl.setStyleSheet("font-size: 14px; background: transparent; border: none; padding: 0;")
+        container_layout.addWidget(text_lbl)
+        container_layout.addStretch()
+
+        # QPushButton with styling, using layout to position content
+        btn_layout = QHBoxLayout(btn)
+        btn_layout.setContentsMargins(14, 0, 12, 0)
+        btn_layout.addWidget(container)
+
+        btn.clicked.connect(lambda checked, s=screen_id: self.navigate_signal.emit(s))
+
+        return btn
+
     def _rebuild_nav(self):
         for btn in self._buttons.values():
             btn.deleteLater()
         self._buttons.clear()
-        # Remove existing items from nav_layout
         while self._nav_layout.count():
             item = self._nav_layout.takeAt(0)
             if item.widget():
@@ -193,28 +210,45 @@ class Sidebar(QWidget):
                         background: rgba(201, 164, 92, 0.12);
                         color: {GOLD};
                         border: none;
-                        border-radius: 8px;
-                        font-size: 14px;
-                        font-weight: 600;
-                        text-align: left;
-                        padding: 10px 12px;
+                        border-top-right-radius: 8px;
+                        border-bottom-right-radius: 8px;
                         border-left: 3px solid {GOLD};
                     }}
+                    QPushButton:hover {{
+                        background: rgba(201, 164, 92, 0.18);
+                    }}
                 """)
+                self._update_child_labels(btn, True)
             else:
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         background: transparent;
                         color: {TEXT_SECONDARY};
                         border: none;
-                        border-radius: 8px;
-                        font-size: 14px;
-                        font-weight: 400;
-                        text-align: left;
-                        padding: 10px 12px;
+                        border-top-right-radius: 8px;
+                        border-bottom-right-radius: 8px;
+                        border-left: 3px solid transparent;
                     }}
                     QPushButton:hover {{
                         background: rgba(255, 255, 255, 0.04);
                         color: {TEXT_PRIMARY};
                     }}
+                """)
+                self._update_child_labels(btn, False)
+
+    def _update_child_labels(self, btn: QPushButton, active: bool):
+        for child in btn.findChildren(QLabel):
+            text = child.text()
+            if len(text) <= 2 and text in [it[2] for it in ADMIN_ITEMS + WAITER_ITEMS]:
+                # Icon label
+                child.setStyleSheet(f"""
+                    font-size: 14px; background: transparent; border: none; padding: 0; margin: 0;
+                    color: {GOLD if active else TEXT_SECONDARY};
+                """)
+            elif text in [it[1] for it in ADMIN_ITEMS + WAITER_ITEMS]:
+                # Text label
+                child.setStyleSheet(f"""
+                    font-size: 14px; background: transparent; border: none; padding: 0; margin: 0;
+                    font-weight: {600 if active else 400};
+                    color: {GOLD if active else TEXT_SECONDARY};
                 """)
