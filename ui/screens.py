@@ -55,7 +55,7 @@ class AdminDashboard(QWidget):
     def _show_loading(self):
         w = QWidget()
         l = QVBoxLayout(w)
-        l.setContentsMargins(28, 28, 28, 28)
+        l.setContentsMargins(24, 24, 24, 24)
         l.addWidget(make_manrope_label("Главная", 24, QFont.Weight.ExtraBold))
         l.addWidget(make_label("Загрузка данных...", 13, TEXT_MUTED))
         l.addStretch()
@@ -78,8 +78,8 @@ class AdminDashboard(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(24)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         # Header
         today_str = datetime.now().strftime("%d %B %Y").lstrip("0")
@@ -94,7 +94,7 @@ class AdminDashboard(QWidget):
 
         # Stats
         stats_grid = QHBoxLayout()
-        stats_grid.setSpacing(16)
+        stats_grid.setSpacing(12)
 
         try:
             active_orders = get_active_orders()
@@ -361,7 +361,7 @@ class WaiterWorkspace(QWidget):
     def _show_loading(self):
         w = QWidget()
         l = QVBoxLayout(w)
-        l.setContentsMargins(28, 28, 28, 28)
+        l.setContentsMargins(24, 24, 24, 24)
         l.addWidget(make_manrope_label("Рабочее место", 24, QFont.Weight.ExtraBold))
         l.addWidget(make_label("Загрузка данных...", 13, TEXT_MUTED))
         l.addStretch()
@@ -384,8 +384,8 @@ class WaiterWorkspace(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(24)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         try:
             all_tables = get_all_tables()
@@ -448,6 +448,7 @@ class WaiterWorkspace(QWidget):
                     border-radius: 14px;
                 }}
                 QFrame:hover {{
+                    background: {BG_ELEVATED};
                     border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.4);
                 }}
             """)
@@ -456,17 +457,17 @@ class WaiterWorkspace(QWidget):
             cl.setSpacing(16)
 
             icon_frame = QFrame()
-            icon_frame.setFixedSize(48, 48)
+            icon_frame.setFixedSize(40, 40)
             icon_frame.setStyleSheet(f"""
                 QFrame {{
                     background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.1);
-                    border-radius: 14px;
+                    border-radius: 12px;
                 }}
             """)
             il = QVBoxLayout(icon_frame)
             il.setAlignment(Qt.AlignmentFlag.AlignCenter)
             ilbl = QLabel(icon_text)
-            ilbl.setStyleSheet(f"font-size: 22px; background: transparent; border: none;")
+            ilbl.setStyleSheet(f"font-size: 18px; background: transparent; border: none;")
             il.addWidget(ilbl)
             cl.addWidget(icon_frame)
 
@@ -615,6 +616,7 @@ class WaiterWorkspace(QWidget):
                     border-radius: 12px;
                 }}
                 QFrame:hover {{
+                    background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.1);
                     border: 1px solid {GOLD};
                 }}
             """)
@@ -876,7 +878,7 @@ class TablesScreen(QWidget):
 
         content = QWidget()
         self._layout = QVBoxLayout(content)
-        self._layout.setContentsMargins(28, 28, 28, 28)
+        self._layout.setContentsMargins(24, 24, 24, 24)
         self._layout.setSpacing(20)
 
         self._refresh()
@@ -943,7 +945,7 @@ class TablesScreen(QWidget):
 
         # Table grid
         grid = QGridLayout()
-        grid.setSpacing(16)
+        grid.setSpacing(12)
 
         filtered = [
             t for t in tables
@@ -1781,8 +1783,8 @@ class OrderDetailsScreen(QWidget):
 
         outer = QWidget()
         self._outer_layout = QVBoxLayout(outer)
-        self._outer_layout.setContentsMargins(28, 28, 28, 28)
-        self._outer_layout.setSpacing(20)
+        self._outer_layout.setContentsMargins(24, 24, 24, 24)
+        self._outer_layout.setSpacing(16)
 
         # Back button (stays across order loads)
         if self._navigate:
@@ -3049,7 +3051,7 @@ class CustomersScreen(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(20)
 
         if self._role == "waiter":
@@ -3117,14 +3119,20 @@ class CustomersScreen(QWidget):
             layout.addWidget(empty)
             return
 
-        # ── Table ──
+        # ── Table wrapper with border ──
+        table_wrapper = Card()
+        twl = QVBoxLayout(table_wrapper)
+        twl.setContentsMargins(0, 0, 0, 0)
+        twl.setSpacing(0)
+
         columns = ["Имя", "Телефон", "Email", "Скидка", "Заказов",
                     "Сумма", "Посл. визит", ""]
         table = DataTable(columns)
         table.setRowCount(len(visible))
         table.horizontalHeader().setStretchLastSection(False)
+        table.setMinimumHeight(320)
 
-        # Column sizing
+        # Column sizing — шире
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)   # Name
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)      # Phone
@@ -3135,8 +3143,11 @@ class CustomersScreen(QWidget):
         hh.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)      # Last visit
         hh.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)      # Actions
 
-        for col, w in {1: 130, 3: 85, 4: 75, 5: 140, 6: 130, 7: 120}.items():
+        for col, w in {1: 150, 3: 100, 4: 90, 5: 160, 6: 150, 7: 140}.items():
             table.setColumnWidth(col, w)
+
+        twl.addWidget(table)
+        layout.addWidget(table_wrapper)
 
         for i, c in enumerate(visible):
             # ── Name with avatar ──
@@ -3750,8 +3761,8 @@ class PaymentsScreen(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(20)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         try:
             payments = get_all_payments()
@@ -3861,8 +3872,8 @@ class ReportsScreen(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(24)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
 
         # Header
         month_names = ["января", "февраля", "марта", "апреля", "мая", "июня",
@@ -4184,78 +4195,56 @@ class SettingsScreen(QWidget):
         ll.addStretch()
         main_layout.addWidget(left)
 
-        # Content
+        # Content — QStackedWidget (переключение секций)
         right = QWidget()
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(28, 28, 28, 28)
-        rl.setSpacing(24)
+        rl.setContentsMargins(24, 24, 24, 24)
+        rl.setSpacing(16)
 
         rl.addWidget(make_manrope_label("Настройки", 24, QFont.Weight.ExtraBold))
         rl.addWidget(make_label("Управление системой и правами доступа", 13, TEXT_MUTED))
 
-        # Restaurant profile
+        self._settings_stack = QStackedWidget()
+
+        # ─── Страница 0: Профиль ресторана ────────────────────
+        profile_page = QWidget()
+        ppl = QVBoxLayout(profile_page)
+        ppl.setContentsMargins(0, 0, 0, 0)
         profile_card = Card()
         pl = QVBoxLayout(profile_card)
         pl.setContentsMargins(24, 24, 24, 24)
         pl.addWidget(make_manrope_label("Профиль ресторана", 15, QFont.Weight.DemiBold))
         pl.addSpacing(16)
-
         fields_grid = QHBoxLayout()
         fields_grid.setSpacing(16)
         left_col = QVBoxLayout()
         left_col.setSpacing(16)
-
-        # Name field
         nv = QVBoxLayout()
         nv.addWidget(make_label("Название", 11, TEXT_MUTED))
         self._restaurant_name_edit = QLineEdit(self._settings.get("name", "GastroHub"))
-        self._restaurant_name_edit.setStyleSheet(f"""
-            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-            border: 1px solid {BORDER}; border-radius: 8px;
-            padding: 10px 14px; font-size: 13px;
-        """)
+        self._restaurant_name_edit.setStyleSheet(f"background: {BG_SECONDARY}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 14px; font-size: 13px;")
         nv.addWidget(self._restaurant_name_edit)
         left_col.addLayout(nv)
-
-        # Phone field
         pv = QVBoxLayout()
         pv.addWidget(make_label("Телефон", 11, TEXT_MUTED))
         self._restaurant_phone_edit = QLineEdit(self._settings.get("phone", "+7 (495) 123-45-67"))
-        self._restaurant_phone_edit.setStyleSheet(f"""
-            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-            border: 1px solid {BORDER}; border-radius: 8px;
-            padding: 10px 14px; font-size: 13px;
-        """)
+        self._restaurant_phone_edit.setStyleSheet(f"background: {BG_SECONDARY}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 14px; font-size: 13px;")
         pv.addWidget(self._restaurant_phone_edit)
         left_col.addLayout(pv)
-
         right_col = QVBoxLayout()
         right_col.setSpacing(16)
-
-        # Address field
         av = QVBoxLayout()
         av.addWidget(make_label("Адрес", 11, TEXT_MUTED))
         self._restaurant_address_edit = QLineEdit(self._settings.get("address", "Москва, ул. Тверская, 24"))
-        self._restaurant_address_edit.setStyleSheet(f"""
-            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-            border: 1px solid {BORDER}; border-radius: 8px;
-            padding: 10px 14px; font-size: 13px;
-        """)
+        self._restaurant_address_edit.setStyleSheet(f"background: {BG_SECONDARY}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 14px; font-size: 13px;")
         av.addWidget(self._restaurant_address_edit)
         right_col.addLayout(av)
-
-        # Email field
         ev = QVBoxLayout()
         ev.addWidget(make_label("Email", 11, TEXT_MUTED))
         self._restaurant_email_edit = QLineEdit(self._settings.get("email", "info@gastrohub.ru"))
-        self._restaurant_email_edit.setStyleSheet(f"""
-            background: {BG_SECONDARY}; color: {TEXT_PRIMARY};
-            border: 1px solid {BORDER}; border-radius: 8px;
-            padding: 10px 14px; font-size: 13px;
-        """)
+        self._restaurant_email_edit.setStyleSheet(f"background: {BG_SECONDARY}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 14px; font-size: 13px;")
         ev.addWidget(self._restaurant_email_edit)
         right_col.addLayout(ev)
-
         fields_grid.addLayout(left_col)
         fields_grid.addLayout(right_col)
         pl.addLayout(fields_grid)
@@ -4263,34 +4252,28 @@ class SettingsScreen(QWidget):
         save_btn = PrimaryButton("Сохранить изменения")
         save_btn.clicked.connect(self._on_save_settings)
         pl.addWidget(save_btn)
-        rl.addWidget(profile_card)
+        ppl.addWidget(profile_card)
+        ppl.addStretch()
+        self._settings_stack.addWidget(profile_page)
 
-        # Role permissions
+        # ─── Страница 1: Пользователи и роли ──────────────────
+        roles_page = QWidget()
+        rpl = QVBoxLayout(roles_page)
+        rpl.setContentsMargins(0, 0, 0, 0)
         perm_card = Card()
         pml = QVBoxLayout(perm_card)
         pml.setContentsMargins(24, 24, 24, 24)
         pml.addWidget(make_manrope_label("Права доступа по ролям", 15, QFont.Weight.DemiBold))
         pml.addWidget(make_label("Настройка разрешений для каждой роли", 12, TEXT_MUTED))
         pml.addSpacing(16)
-
         roles_row = QHBoxLayout()
         roles_row.setSpacing(20)
         for role_name, perms, color in [
-            ("Администратор", [
-                "Управление меню", "Управление столиками", "Просмотр отчетов",
-                "Управление клиентами", "Просмотр оплат", "Редактирование заказов",
-            ], GOLD),
-            ("Официант", [
-                "Создание заказов", "Добавление блюд", "Изменение статусов",
-                "Оплата заказов", "Просмотр меню", "Просмотр столиков",
-            ], SUCCESS),
+            ("Администратор", ["Управление меню", "Управление столиками", "Просмотр отчетов", "Управление клиентами", "Просмотр оплат", "Редактирование заказов"], GOLD),
+            ("Официант", ["Создание заказов", "Добавление блюд", "Изменение статусов", "Оплата заказов", "Просмотр меню", "Просмотр столиков"], SUCCESS),
         ]:
             rc = QFrame()
-            rc.setStyleSheet(f"""
-                background: {BG_SECONDARY};
-                border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.13);
-                border-radius: 12px;
-            """)
+            rc.setStyleSheet(f"background: {BG_SECONDARY}; border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.13); border-radius: 12px;")
             rcl = QVBoxLayout(rc)
             rcl.setContentsMargins(20, 20, 20, 20)
             rcl.setSpacing(8)
@@ -4301,13 +4284,7 @@ class SettingsScreen(QWidget):
                 row = QHBoxLayout()
                 row.setSpacing(8)
                 check = QLabel("✓")
-                check.setStyleSheet(f"""
-                    color: {color}; font-size: 10px; font-weight: bold;
-                    background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.08);
-                    border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.19);
-                    border-radius: 9px; padding: 3px;
-                    min-width: 12px; min-height: 12px; max-width: 12px; max-height: 12px;
-                """)
+                check.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold; background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.08); border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.19); border-radius: 9px; padding: 3px; min-width: 12px; min-height: 12px; max-width: 12px; max-height: 12px;")
                 check.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 row.addWidget(check)
                 row.addWidget(make_label(perm, 13, TEXT_SECONDARY))
@@ -4315,9 +4292,14 @@ class SettingsScreen(QWidget):
                 rcl.addLayout(row)
             roles_row.addWidget(rc)
         pml.addLayout(roles_row)
-        rl.addWidget(perm_card)
+        rpl.addWidget(perm_card)
+        rpl.addStretch()
+        self._settings_stack.addWidget(roles_page)
 
-        # Order statuses
+        # ─── Страница 2: Статусы заказов ──────────────────────
+        status_page = QWidget()
+        spl = QVBoxLayout(status_page)
+        spl.setContentsMargins(0, 0, 0, 0)
         status_card = Card()
         sl = QVBoxLayout(status_card)
         sl.setContentsMargins(24, 24, 24, 24)
@@ -4331,11 +4313,7 @@ class SettingsScreen(QWidget):
             ("paid", "Оплачен", EMERALD), ("cancelled", "Отменен", ERROR),
         ]:
             badge = QFrame()
-            badge.setStyleSheet(f"""
-                background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.06);
-                border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.19);
-                border-radius: 10px;
-            """)
+            badge.setStyleSheet(f"background: rgba({','.join(map(str, hex_to_rgb(color)))}, 0.06); border: 1px solid rgba({','.join(map(str, hex_to_rgb(color)))}, 0.19); border-radius: 10px;")
             bl = QHBoxLayout(badge)
             bl.setContentsMargins(16, 10, 16, 10)
             bl.setSpacing(8)
@@ -4346,9 +4324,14 @@ class SettingsScreen(QWidget):
             status_row.addWidget(badge)
         status_row.addStretch()
         sl.addLayout(status_row)
-        rl.addWidget(status_card)
+        spl.addWidget(status_card)
+        spl.addStretch()
+        self._settings_stack.addWidget(status_page)
 
-        # Zones
+        # ─── Страница 3: Зоны столиков ────────────────────────
+        zones_page = QWidget()
+        zpl = QVBoxLayout(zones_page)
+        zpl.setContentsMargins(0, 0, 0, 0)
         zones_card = Card()
         zl = QVBoxLayout(zones_card)
         zl.setContentsMargins(24, 24, 24, 24)
@@ -4363,10 +4346,7 @@ class SettingsScreen(QWidget):
         self._zone_rows: list[QFrame] = []
         for zone in self._zones:
             row = QFrame()
-            row.setStyleSheet(f"""
-                background: {BG_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-            """)
+            row.setStyleSheet(f"background: {BG_SECONDARY}; border: 1px solid {BORDER}; border-radius: 8px;")
             rl2 = QHBoxLayout(row)
             rl2.setContentsMargins(16, 12, 16, 12)
             rl2.addWidget(make_label(f"📍 {zone}", 14, TEXT_PRIMARY))
@@ -4380,9 +4360,14 @@ class SettingsScreen(QWidget):
             rl2.addWidget(del_btn)
             zl.addWidget(row)
             self._zone_rows.append(row)
-        rl.addWidget(zones_card)
+        zpl.addWidget(zones_card)
+        zpl.addStretch()
+        self._settings_stack.addWidget(zones_page)
 
-        # Payment methods
+        # ─── Страница 4: Способы оплаты ───────────────────────
+        paym_page = QWidget()
+        ppl2 = QVBoxLayout(paym_page)
+        ppl2.setContentsMargins(0, 0, 0, 0)
         paym_card = Card()
         pml2 = QVBoxLayout(paym_card)
         pml2.setContentsMargins(24, 24, 24, 24)
@@ -4392,10 +4377,7 @@ class SettingsScreen(QWidget):
         payment_methods = self._settings.get("payment_methods", {})
         for method, enabled in payment_methods.items():
             row = QFrame()
-            row.setStyleSheet(f"""
-                background: {BG_SECONDARY};
-                border: 1px solid {BORDER}; border-radius: 8px;
-            """)
+            row.setStyleSheet(f"background: {BG_SECONDARY}; border: 1px solid {BORDER}; border-radius: 8px;")
             rl3 = QHBoxLayout(row)
             rl3.setContentsMargins(16, 12, 16, 12)
             rl3.addWidget(make_label(method, 14, TEXT_PRIMARY))
@@ -4409,25 +4391,22 @@ class SettingsScreen(QWidget):
             toggle_dot.move(22 if enabled else 4, 3)
             bg = SUCCESS if enabled else DISABLED
             border = SUCCESS if enabled else BORDER
-            toggle.setStyleSheet(f"""
-                background: rgba({','.join(map(str, hex_to_rgb(bg)))}, 0.2);
-                border: 1px solid {border};
-                border-radius: 12px;
-            """)
-            toggle_dot.setStyleSheet(f"""
-                background: {bg};
-                border-radius: 8px;
-            """)
+            toggle.setStyleSheet(f"background: rgba({','.join(map(str, hex_to_rgb(bg)))}, 0.2); border: 1px solid {border}; border-radius: 12px;")
+            toggle_dot.setStyleSheet(f"background: {bg}; border-radius: 8px;")
             rl3.addWidget(toggle)
             self._payment_toggles[method] = toggle
             pml2.addWidget(row)
-        rl.addWidget(paym_card)
+        ppl2.addWidget(paym_card)
+        ppl2.addStretch()
+        self._settings_stack.addWidget(paym_page)
 
+        rl.addWidget(self._settings_stack, 1)
         main_layout.addWidget(right, 1)
 
     def _set_section(self, section_idx: int):
         """Switch settings section — update nav styles and scroll to content."""
         self._current_section = section_idx
+        self._settings_stack.setCurrentIndex(section_idx)
         for i, btn in enumerate(self._nav_btns):
             active = i == section_idx
             btn.setStyleSheet(f"""

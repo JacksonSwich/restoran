@@ -40,18 +40,6 @@ class PrimaryButton(QPushButton):
 
     def set_enabled(self, enabled: bool):
         self.setEnabled(enabled)
-        if enabled:
-            self.setStyleSheet(BTN_PRIMARY_QSS)
-        else:
-            self.setStyleSheet(f"""
-                background: {BG_ELEVATED};
-                color: {DISABLED};
-                border: none;
-                border-radius: 8px;
-                font-weight: 700;
-                font-size: 13px;
-                padding: 9px 16px;
-            """)
 
 
 class SecondaryButton(QPushButton):
@@ -61,6 +49,9 @@ class SecondaryButton(QPushButton):
         self.setStyleSheet(BTN_SECONDARY_QSS)
         self.setMinimumHeight(36)
 
+    def set_enabled(self, enabled: bool):
+        self.setEnabled(enabled)
+
 
 class DangerButton(QPushButton):
     def __init__(self, text: str, parent=None):
@@ -69,14 +60,13 @@ class DangerButton(QPushButton):
         self.setStyleSheet(BTN_DANGER_QSS)
         self.setMinimumHeight(36)
 
+    def set_enabled(self, enabled: bool):
+        self.setEnabled(enabled)
 
-class GoldButton(QPushButton):
-    """Золотая кнопка с градиентом, как в дизайне."""
-    def __init__(self, text: str, parent=None):
-        super().__init__(text, parent)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(BTN_PRIMARY_QSS)
-        self.setMinimumHeight(36)
+
+class GoldButton(PrimaryButton):
+    """Золотая кнопка — алиас для PrimaryButton (полностью идентична)."""
+    pass
 
 
 # ─── StatusBadge ────────────────────────────────────────────────
@@ -108,14 +98,14 @@ PAYMENT_STATUS_CONFIG = {
 class StatusBadge(QFrame):
     def __init__(self, config: dict, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(24)
+        self.setFixedHeight(22)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 2, 8, 2)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
 
         dot = QLabel("●")
-        dot.setStyleSheet(f"color: {config['color']}; font-size: 8px; background: transparent;")
-        dot.setFixedWidth(8)
+        dot.setStyleSheet(f"color: {config['color']}; font-size: 7px; background: transparent;")
+        dot.setFixedWidth(6)
         layout.addWidget(dot)
 
         lbl = QLabel(config["label"])
@@ -131,7 +121,7 @@ class StatusBadge(QFrame):
             StatusBadge {{
                 background: {config['bg']};
                 border: 1px solid {config['color']}33;
-                border-radius: 12px;
+                border-radius: 11px;
             }}
         """)
 
@@ -151,9 +141,14 @@ class SearchInput(QLineEdit):
                 padding: 8px 12px 8px 36px;
                 font-size: 13px;
             }}
+            QLineEdit:hover {{
+                border: 1px solid rgba(201, 164, 92, 0.25);
+            }}
+            QLineEdit:focus {{
+                border: 1px solid rgba(201, 164, 92, 0.5);
+            }}
         """)
         self.setMinimumHeight(36)
-        self.setMaximumWidth(300)
 
 
 # ─── FilterTabs ─────────────────────────────────────────────────
@@ -181,7 +176,7 @@ class FilterTab(QPushButton):
                     color: {self._color};
                     font-size: 13px;
                     font-weight: 600;
-                    padding: 7px 14px;
+                    padding: 6px 12px;
                 }}
             """)
         else:
@@ -193,10 +188,12 @@ class FilterTab(QPushButton):
                     color: {TEXT_SECONDARY};
                     font-size: 13px;
                     font-weight: 400;
-                    padding: 7px 14px;
+                    padding: 6px 12px;
                 }}
                 QPushButton:hover {{
                     background: rgba(255,255,255,0.03);
+                    border: 1px solid rgba(201, 164, 92, 0.25);
+                    color: {TEXT_PRIMARY};
                 }}
             """)
 
@@ -211,13 +208,35 @@ def hex_to_rgb(hex_color: str) -> tuple:
 class Card(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            Card {{
-                background: {BG_CARD};
-                border: 1px solid {BORDER};
-                border-radius: 12px;
-            }}
-        """)
+        self._update_style(normal=True)
+
+    def _update_style(self, normal: bool = True):
+        if normal:
+            self.setStyleSheet(f"""
+                Card {{
+                    background: {BG_CARD};
+                    border: 1px solid {BORDER};
+                    border-top: 1.5px solid rgba(201, 164, 92, 0.30);
+                    border-radius: 14px;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                Card {{
+                    background: {BG_CARD};
+                    border: 1px solid rgba(201, 164, 92, 0.25);
+                    border-top: 1.5px solid rgba(201, 164, 92, 0.55);
+                    border-radius: 14px;
+                }}
+            """)
+
+    def enterEvent(self, event):
+        self._update_style(normal=False)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._update_style(normal=True)
+        super().leaveEvent(event)
 
 
 # ─── SectionHeader ──────────────────────────────────────────────
@@ -244,14 +263,15 @@ class StatCard(QFrame):
             StatCard {{
                 background: {BG_CARD};
                 border: 1px solid {BORDER};
+                border-left: 3px solid {color};
                 border-radius: 12px;
             }}
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(4)
 
-        val_lbl = make_manrope_label(value, 26, QFont.Weight.ExtraBold, TEXT_PRIMARY)
+        val_lbl = make_manrope_label(value, 28, QFont.Weight.ExtraBold, TEXT_PRIMARY)
         layout.addWidget(val_lbl)
 
         lbl = make_label(label, 12, TEXT_SECONDARY)
@@ -279,16 +299,9 @@ class DataTable(QTableWidget):
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
         self.setStyleSheet(f"""
-            QTableWidget {{
-                background: {BG_CARD};
-                border: 1px solid {BORDER};
-                border-radius: 12px;
-                gridline-color: transparent;
-                font-size: 13px;
-                color: {TEXT_PRIMARY};
-            }}
             QTableWidget::item {{
-                padding: 10px 16px;
+                padding: 8px 12px;
+                color: {TEXT_PRIMARY};
                 border-bottom: 1px solid rgba(48, 52, 59, 0.13);
             }}
             QTableWidget::item:selected {{
@@ -297,6 +310,9 @@ class DataTable(QTableWidget):
             QTableWidget::item:hover {{
                 background: rgba(255, 255, 255, 0.02);
             }}
+            QTableWidget::item:alternate {{
+                background: rgba(255, 255, 255, 0.01);
+            }}
             QHeaderView::section {{
                 background: #1A1D21;
                 color: {TEXT_MUTED};
@@ -304,7 +320,7 @@ class DataTable(QTableWidget):
                 font-weight: 600;
                 letter-spacing: 0.05em;
                 border: none;
-                padding: 10px 16px;
+                padding: 8px 12px;
                 border-bottom: 1px solid {BORDER};
             }}
             QHeaderView::section:first {{
@@ -312,8 +328,5 @@ class DataTable(QTableWidget):
             }}
             QHeaderView::section:last {{
                 border-top-right-radius: 12px;
-            }}
-            QTableWidget::item:alternate {{
-                background: rgba(255, 255, 255, 0.01);
             }}
         """)
