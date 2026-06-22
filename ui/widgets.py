@@ -298,20 +298,29 @@ class DataTable(QTableWidget):
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
+        self.verticalHeader().setDefaultSectionSize(72)
         self.setStyleSheet(f"""
+            QTableWidget {{
+                background: {BG_CARD};
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+                gridline-color: transparent;
+                font-size: 14px;
+                color: {TEXT_PRIMARY};
+            }}
             QTableWidget::item {{
-                padding: 8px 12px;
+                padding: 14px 18px;
                 color: {TEXT_PRIMARY};
                 border-bottom: 1px solid rgba(48, 52, 59, 0.13);
             }}
             QTableWidget::item:selected {{
-                background: rgba(201, 164, 92, 0.06);
+                background: transparent;
             }}
             QTableWidget::item:hover {{
-                background: rgba(255, 255, 255, 0.02);
+                background: transparent;
             }}
             QTableWidget::item:alternate {{
-                background: rgba(255, 255, 255, 0.01);
+                background: #0E0F11;
             }}
             QHeaderView::section {{
                 background: #1A1D21;
@@ -320,13 +329,7 @@ class DataTable(QTableWidget):
                 font-weight: 600;
                 letter-spacing: 0.05em;
                 border: none;
-                padding: 8px 12px;
+                padding: 12px 18px;
                 border-bottom: 1px solid {BORDER};
-            }}
-            QHeaderView::section:first {{
-                border-top-left-radius: 12px;
-            }}
-            QHeaderView::section:last {{
-                border-top-right-radius: 12px;
             }}
         """)

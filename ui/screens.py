@@ -887,12 +887,22 @@ class TablesScreen(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
 
+    @staticmethod
+    def _clear_layout(layout):
+        """Recursively clear all items from a layout, deleting widgets."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            else:
+                sub = item.layout()
+                if sub:
+                    TablesScreen._clear_layout(sub)
+
     def _refresh(self):
-        # Clear layout
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # Clear layout — рекурсивно удаляем виджеты и вложенные лэйауты
+        self._clear_layout(self._layout)
 
         header = QHBoxLayout()
         hleft = QVBoxLayout()
@@ -1068,7 +1078,7 @@ class TablesScreen(QWidget):
             border: 1px solid {_base_border};
             border-radius: {_border_r};
         """)
-        card.setMinimumSize(240, 180)
+        card.setFixedSize(280, 260)
 
         cl = QVBoxLayout(card)
         cl.setContentsMargins(20, 20, 20, 20)
@@ -3034,35 +3044,48 @@ class CustomersScreen(QWidget):
         self._search = ""
         self._page_size = 10
         self._visible_count = self._page_size
-        self._scroll: QScrollArea | None = None
         self.setStyleSheet(f"background: {BG_PRIMARY};")
         self._setup_ui()
 
     def _setup_ui(self):
-        if self._scroll:
-            self._scroll.deleteLater()
-            self._scroll = None
-
+        """Создаёт структуру экрана (однократно)."""
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._scroll = scroll
 
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(20)
+        self._content = QWidget()
+        self._layout = QVBoxLayout(self._content)
+        self._layout.setContentsMargins(24, 24, 24, 24)
+        self._layout.setSpacing(20)
 
-        if self._role == "waiter":
-            self._build_waiter_view(layout)
-        else:
-            self._build_admin_view(layout)
+        self._refresh()
 
-        scroll.setWidget(content)
+        scroll.setWidget(self._content)
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
+
+    @staticmethod
+    def _clear_layout(layout):
+        """Recursively clear all items from a layout."""
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+            else:
+                sub = item.layout()
+                if sub:
+                    CustomersScreen._clear_layout(sub)
+
+    def _refresh(self):
+        """Перестраивает содержимое внутри существующего scroll-а."""
+        self._clear_layout(self._layout)
+        if self._role == "waiter":
+            self._build_waiter_view(self._layout)
+        else:
+            self._build_admin_view(self._layout)
 
     # ─── Admin view ───────────────────────────────────────────
 
@@ -3132,18 +3155,13 @@ class CustomersScreen(QWidget):
         table.horizontalHeader().setStretchLastSection(False)
         table.setMinimumHeight(320)
 
-        # Column sizing — шире
+        # Column sizing — все колонки интерактивные (пользователь может менять ширину)
         hh = table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)   # Name
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)      # Phone
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)    # Email
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)      # Discount
-        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)      # Orders
-        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)      # Amount
-        hh.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)      # Last visit
-        hh.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)      # Actions
+        for col in range(table.columnCount()):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
 
-        for col, w in {1: 150, 3: 100, 4: 90, 5: 160, 6: 150, 7: 140}.items():
+        # Увеличенная ширина колонок + все интерактивные
+        for col, w in {0: 220, 1: 160, 2: 220, 3: 90, 4: 85, 5: 160, 6: 150, 7: 130}.items():
             table.setColumnWidth(col, w)
 
         twl.addWidget(table)
@@ -3156,6 +3174,7 @@ class CustomersScreen(QWidget):
             color = _avatar_color(name)
 
             name_widget = QWidget()
+            name_widget.setStyleSheet("background: transparent;")
             nl = QHBoxLayout(name_widget)
             nl.setContentsMargins(0, 0, 0, 0)
             nl.setSpacing(10)
@@ -3173,7 +3192,7 @@ class CustomersScreen(QWidget):
                 color: #FFFFFF;
             """)
             nl.addWidget(avatar)
-            nl.addWidget(make_label(name, 13, TEXT_PRIMARY, QFont.Weight.DemiBold))
+            nl.addWidget(make_label(name, 14, TEXT_PRIMARY, QFont.Weight.DemiBold))
             nl.addStretch()
             table.setCellWidget(i, 0, name_widget)
 
@@ -3189,6 +3208,7 @@ class CustomersScreen(QWidget):
 
             # ── Discount badge ──
             disc_widget = QWidget()
+            disc_widget.setStyleSheet("background: transparent;")
             dl = QHBoxLayout(disc_widget)
             dl.setContentsMargins(0, 0, 0, 0)
             disc = float(c.get("discount_percent", 0) or 0)
@@ -3220,6 +3240,7 @@ class CustomersScreen(QWidget):
             # ── Total amount (monospace) ──
             total = float(c.get("total_amount", 0) or 0)
             amt_widget = QWidget()
+            amt_widget.setStyleSheet("background: transparent;")
             amt_layout = QHBoxLayout(amt_widget)
             amt_layout.setContentsMargins(0, 0, 0, 0)
             amt_layout.setSpacing(2)
@@ -3249,6 +3270,7 @@ class CustomersScreen(QWidget):
 
             # ── Action buttons ──
             actions = QWidget()
+            actions.setStyleSheet("background: transparent;")
             al = QHBoxLayout(actions)
             al.setContentsMargins(0, 0, 0, 0)
             al.setSpacing(4)
@@ -3455,11 +3477,11 @@ class CustomersScreen(QWidget):
     def _set_search(self, text: str):
         self._search = text.strip()
         self._visible_count = self._page_size
-        self._setup_ui()
+        self._refresh()
 
     def _on_show_more(self):
         self._visible_count += self._page_size
-        self._setup_ui()
+        self._refresh()
 
     # ─── CRUD handlers ─────────────────────────────────────────
 
@@ -3474,7 +3496,7 @@ class CustomersScreen(QWidget):
                 )
                 QMessageBox.information(self, "Готово",
                     f"Клиент {result['full_name']} создан")
-                self._setup_ui()
+                self._refresh()
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка",
                     f"Не удалось создать клиента:\n{e}")
@@ -3496,7 +3518,7 @@ class CustomersScreen(QWidget):
                 update_customer(customer["id"], **result)
                 QMessageBox.information(self, "Готово",
                     f"Клиент {result['full_name']} обновлён")
-                self._setup_ui()
+                self._refresh()
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка",
                     f"Не удалось обновить клиента:\n{e}")
@@ -3513,7 +3535,7 @@ class CustomersScreen(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 delete_customer(customer["id"])
-                self._setup_ui()
+                self._refresh()
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка",
                     f"Не удалось удалить клиента:\n{e}")
